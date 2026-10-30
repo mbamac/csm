@@ -1,0 +1,175 @@
+# csm — Claude Code session manager.
+# Copyright (C) 2026 Maciej Bartosiak
+# Licensed under the GNU GPL version 3 or later; see LICENSE.
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+csm — zarządza katalogami sesji Claude Code.
+
+Pokazuje je, przenosi razem z repozytorium, naprawia po ręcznym
+przeniesieniu repozytorium, wykrywa osierocone i usuwa niepotrzebne.
+Uruchomiony bez parametrów otwiera interfejs pełnoekranowy.
+
+Użycie:
+  csm                              interfejs pełnoekranowy
+  csm -l [-oj]                     lista katalogów sesji
+  csm -s ŚCIEŻKA                   szczegóły i lista sesji projektu
+  csm -m [-n] ŹRÓDŁO... CEL        przeniesienie repozytorium z sesjami
+  csm -F [-n] STARA NOWA           naprawa po ręcznym przeniesieniu
+  csm -r [-ny] ŚCIEŻKA...          usunięcie katalogów sesji do kosza
+  csm -u [-n] [WPIS]               zawartość kosza albo przywrócenie wpisu
+  csm -E [-ny] [WPIS...]           opróżnienie kosza
+  csm -P [-ny] [REPO...]           usunięcie nieistniejących ścieżek GitHub
+  csm [-l|-s|-m|-F|-r|-u|-E|-P] -h pomoc
+  csm -V                           wersja programu
+
+Co zrobić (dokładnie jedna):
+  -l, --list      lista katalogów sesji
+  -s, --show      szczegóły i lista sesji projektu
+  -m, --move      przeniesienie repozytorium z sesjami
+  -F, --fix       naprawa po ręcznym przeniesieniu
+  -r, --remove    usunięcie katalogów sesji do kosza
+  -u, --restore   zawartość kosza albo przywrócenie wpisu
+  -E, --empty     opróżnienie kosza
+  -P, --prune     usunięcie nieistniejących ścieżek repozytoriów GitHub
+
+Opcje:
+  -n, --dry-run   pokaż plan zmian, niczego nie zmieniaj
+  -y, --yes       usuń bez pytania (-r, -E, -P)
+  -o, --orphans   tylko osierocone katalogi sesji
+  -j, --json      wynik do skryptów
+  -h, --help      pomoc; z opcją akcji pomoc do niej
+  -V, --version   wersja programu
+
+Krótkie opcje można łączyć (-mn); „--” kończy opcje.
+
+Interfejs pełnoekranowy pokazuje katalogi sesji na liście, a pod nią
+szczegóły i sesje wybranego. Przyciski na dole podają swoje klawisze,
+te same litery co opcje (m f r l), t kosz, / filtr, q wyjście; Spacja
+zaznacza katalogi, Enter i Tab przechodzą do szczegółów, o i O zmieniają
+sortowanie, U usuwa nieistniejące ścieżki GitHub, ? pokazuje tę pomoc.
+Myszką można klikać, przewijać i przeciągać granicę między panelami.
+Sortowanie, filtr, wybrany katalog i granica paneli zostają takie same
+przy następnym uruchomieniu.
+
+Klawisz „,” otwiera ustawienia. Motyw jest jasny albo ciemny według
+tła terminala (automatyczny), w kolorach terminala (systemowy), zawsze
+jasny albo zawsze ciemny. Zmiana zapisuje się od razu.
+
+Pliki: kosz, ustawienia i zapamiętany widok (state) są
+w ~/Library/Application Support/csm na macOS. Na Linuksie kosz
+i ustawienia są w $XDG_DATA_HOME/csm (domyślnie ~/.local/share/csm),
+a widok w $XDG_STATE_HOME/csm (domyślnie ~/.local/state/csm).
+
+Środowisko: NO_COLOR wyłącza kolory. COLORTERM=truecolor (albo 24bit)
+daje motywom jasnemu i ciemnemu dokładne kolory; bez niej biorą
+najbliższe z 256.
+
+Kod wyjścia: 0 sukces, 1 błąd części operacji, 2 błędne użycie,
+3 Claude Code działa.
+@ list
+csm -l [-oj] — pokazuje katalogi sesji z ich stanem, liczbą sesji,
+rozmiarem i datą ostatniej zmiany.
+
+Stany:
+  aktywny       projekt istnieje
+  osierocony    projektu już nie ma
+  niedostępny   nie da się sprawdzić: brak dostępu albo niepodłączony dysk
+  nieznany      żaden plik sesji nie mówi, gdzie jest projekt
+
+Katalog sesji bez znanego projektu jest pokazany pod własną nazwą.
+
+  -o, --orphans   tylko osierocone katalogi sesji
+  -j, --json      wynik do skryptów: tablica JSON z jednym obiektem na
+                  katalog sesji i polami dir, path (null, gdy nieznana),
+                  state (active, orphan, unavailable, unknown), sessions,
+                  size (w bajtach) i modified (UTC)
+@ show
+csm -s ŚCIEŻKA — pokazuje szczegóły projektu i jego sesje, od najnowszej.
+
+ŚCIEŻKA to ścieżka projektu albo nazwa katalogu sesji; nazwa zaczyna się
+od „-”, więc stoi po „--”: csm -s -- -Users-ja-repo.
+
+Dla każdej sesji: kiedy się zaczęła i kiedy ostatnio zmieniła, liczba
+wiadomości, gałąź git i pierwszy prompt, skrócony do szerokości terminala.
+
+Przy osieroconym projekcie pokazuje też, gdzie projekt może być teraz:
+inne ścieżki jego repozytorium GitHub i katalogi o tej samej nazwie obok
+aktywnych projektów. „csm -F” przenosi tam sesje.
+@ move
+csm -m [-n] ŹRÓDŁO... CEL — przenosi repozytorium razem z jego sesjami.
+
+Przy kilku źródłach CEL musi być istniejącym katalogiem. Gdy CEL jest
+katalogiem, repozytorium trafia do jego wnętrza, jak w mv.
+
+Katalogi sesji repozytorium i jego podkatalogów dostają nową ścieżkę.
+Gdy katalog sesji o nowej nazwie już istnieje, oba są scalane; plik,
+który jest po obu stronach, nigdy nie jest nadpisywany — zostaje
+w starym miejscu i trafia do raportu. Wpisy w .claude.json idą za
+repozytorium, a plik jest najpierw kopiowany do .claude.json.bak.
+Gdy działa Claude Code, nic się nie zmienia.
+
+  -n, --dry-run   pokaż plan zmian, niczego nie zmieniaj
+@ fix
+csm -F [-n] STARA NOWA — przenosi sesje repozytorium, które przeniesiono
+już ręcznie ze STAREJ ścieżki na NOWĄ.
+
+STARA nie może już istnieć, a NOWA musi istnieć. Sesje i .claude.json
+zmieniają się tak jak przy -m.
+
+  -n, --dry-run   pokaż plan zmian, niczego nie zmieniaj
+@ remove
+csm -r [-ny] ŚCIEŻKA... — przenosi katalogi sesji do kosza, skąd można
+je przywrócić. Samego repozytorium nigdy nie usuwa.
+
+ŚCIEŻKA to ścieżka projektu albo nazwa katalogu sesji, jak przy -s;
+sesje z podkatalogów projektu trzeba podać osobno. Usunąć można też
+katalog sesji istniejącego projektu. Gdy projektu już nie ma, jego wpis
+w .claude.json trafia do kosza razem z katalogiem sesji.
+
+Przed usunięciem program pokazuje plan i pyta; Return znaczy „nie”.
+Bez terminala, w którym da się zapytać, potrzebne jest --yes. Gdy działa
+Claude Code, nic się nie zmienia.
+
+Kosz: ~/Library/Application Support/csm/trash na macOS,
+$XDG_DATA_HOME/csm/trash (domyślnie ~/.local/share/csm/trash) na Linuksie.
+
+  -n, --dry-run   pokaż plan zmian, niczego nie zmieniaj
+  -y, --yes       usuń bez pytania
+@ restore
+csm -u [-n] [WPIS] — bez argumentu pokazuje zawartość kosza, z argumentem
+przywraca wpis.
+
+Lista podaje nazwę wpisu, czas usunięcia, rozmiar i projekt, a pod nią
+łączny rozmiar kosza. WPIS to nazwa z tej listy.
+
+Katalog sesji wraca na swoje miejsce. Gdy katalog o tej nazwie już jest,
+oba są scalane; plik, który jest po obu stronach, zostaje w koszu
+i trafia do raportu. Wpis w .claude.json wraca, chyba że jest tam już
+wpis tego projektu. Gdy działa Claude Code, nic się nie zmienia.
+
+  -n, --dry-run   pokaż plan zmian, niczego nie zmieniaj
+@ empty
+csm -E [-ny] [WPIS...] — usuwa z kosza na dobre wskazane wpisy albo,
+bez argumentów, cały kosz.
+
+Przed usunięciem program pokazuje listę i pyta; Return znaczy „nie”.
+Kosz nigdy nie opróżnia się sam.
+
+  -n, --dry-run   pokaż, co zostanie usunięte, niczego nie usuwaj
+  -y, --yes       usuń bez pytania
+@ prune
+csm -P [-ny] [REPO...] — usuwa z githubRepoPaths w .claude.json ścieżki,
+których już nie ma.
+
+Claude Code zapamiętuje tam, gdzie na tym komputerze leży każde
+repozytorium GitHub (właściciel/repo), i nigdy nie zapomina ścieżki,
+nawet nieistniejącej. Bez argumentów sprawdzane są ścieżki wszystkich
+repozytoriów, z argumentami — tylko podanych. Ścieżka, której nie da się
+sprawdzić (brak dostępu, niepodłączony dysk), zostaje.
+
+Przed zmianą program pokazuje listę i pyta; Return znaczy „nie”. Plik
+jest najpierw kopiowany do .claude.json.bak. Gdy działa Claude Code, nic
+się nie zmienia.
+
+  -n, --dry-run   pokaż, co zniknie, niczego nie zmieniaj
+  -y, --yes       usuń bez pytania

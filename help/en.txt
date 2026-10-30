@@ -1,0 +1,181 @@
+# csm — Claude Code session manager.
+# Copyright (C) 2026 Maciej Bartosiak
+# Licensed under the GNU GPL version 3 or later; see LICENSE.
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+csm — manages Claude Code session directories.
+
+It shows them, moves them together with a repository, repairs them after
+a repository was moved by hand, finds orphaned ones and removes the ones
+you no longer need. Run without arguments, it opens a full-screen
+interface.
+
+Usage:
+  csm                              full-screen interface
+  csm -l [-oj]                     list session directories
+  csm -s PATH                      details and sessions of a project
+  csm -m [-n] SOURCE... TARGET     move a repository with its sessions
+  csm -F [-n] OLD NEW              repair after a manual move
+  csm -r [-ny] PATH...             move session directories to the trash
+  csm -u [-n] [ENTRY]              list the trash or restore an entry
+  csm -E [-ny] [ENTRY...]          empty the trash
+  csm -P [-ny] [REPO...]           forget GitHub paths that are gone
+  csm [-l|-s|-m|-F|-r|-u|-E|-P] -h help
+  csm -V                           program version
+
+What to do (exactly one):
+  -l, --list      list session directories
+  -s, --show      details and sessions of a project
+  -m, --move      move a repository with its sessions
+  -F, --fix       repair after a manual move
+  -r, --remove    move session directories to the trash
+  -u, --restore   list the trash or restore an entry
+  -E, --empty     empty the trash
+  -P, --prune     forget GitHub repository paths that are gone
+
+Options:
+  -n, --dry-run   show the planned changes, change nothing
+  -y, --yes       remove without asking (-r, -E, -P)
+  -o, --orphans   only orphaned session directories
+  -j, --json      output for scripts
+  -h, --help      help; with an action option, help for it
+  -V, --version   program version
+
+Short options can be combined (-mn); "--" ends the options.
+
+The full-screen interface shows the session directories in a list,
+with the details and sessions of the chosen one below it. The buttons
+at the bottom show their keys, the same letters as the options
+(m f r l), t the trash, / filter, q quit; Space marks directories,
+Enter and Tab move to the details, o and O change the sorting,
+U forgets GitHub paths that are gone, ? shows this help. The mouse clicks, scrolls and drags
+the border between the panels. The sorting, the filter, the chosen
+directory and the border stay as they were for the next run.
+
+The "," key opens the settings. The theme is light or dark by the
+terminal's background (automatic), the terminal's own colours (system),
+or always light or always dark. A change is saved at once.
+
+Files: the trash, the settings and the remembered view (state) are in
+~/Library/Application Support/csm on macOS. On Linux the trash and the
+settings are in $XDG_DATA_HOME/csm (~/.local/share/csm by default), the
+view in $XDG_STATE_HOME/csm (~/.local/state/csm).
+
+Environment: NO_COLOR turns the colours off. COLORTERM=truecolor (or
+24bit) gives the light and dark themes their exact colours; without it
+they use the nearest of 256.
+
+Exit status: 0 success, 1 part of the operation failed, 2 wrong usage,
+3 Claude Code is running.
+@ list
+csm -l [-oj] — lists session directories with their state, number of
+sessions, size and last change.
+
+States:
+  active        the project exists
+  orphaned      the project is gone
+  unavailable   cannot tell: no access, or its volume is not mounted
+  unknown       no session file says where the project is
+
+A session directory without a known project shows its own name.
+
+  -o, --orphans   only orphaned session directories
+  -j, --json      output for scripts: a JSON array with one object per
+                  session directory and the fields dir, path (null when
+                  unknown), state (active, orphan, unavailable, unknown),
+                  sessions, size (bytes) and modified (UTC)
+@ show
+csm -s PATH — shows a project's details and its sessions, newest first.
+
+PATH is a project path or the name of a session directory; a name starts
+with "-", so it comes after "--": csm -s -- -Users-me-repo.
+
+For each session: when it started and last changed, the number of
+messages, the git branch and the first prompt, cut to the width of the
+terminal.
+
+For an orphaned project it also lists where the project may be now:
+other paths of its GitHub repository and directories of the same name
+next to the active projects. "csm -F" moves the sessions there.
+@ move
+csm -m [-n] SOURCE... TARGET — moves a repository together with its
+sessions.
+
+With several sources, TARGET must be an existing directory. When
+TARGET is a directory, the repository goes into it, as with mv.
+
+The session directories of the repository and its subdirectories get
+the new path. When a session directory of that name already exists,
+the two are merged; a file found on both sides is never overwritten,
+it stays in the old place and is reported. The entries in .claude.json
+follow, and the file is first copied to .claude.json.bak. Nothing
+changes while Claude Code is running.
+
+  -n, --dry-run   show the planned changes, change nothing
+@ fix
+csm -F [-n] OLD NEW — moves the sessions of a repository that was
+already moved by hand from OLD to NEW.
+
+OLD must no longer exist and NEW must exist. Sessions and .claude.json
+change as with -m.
+
+  -n, --dry-run   show the planned changes, change nothing
+@ remove
+csm -r [-ny] PATH... — moves session directories to the trash, where they
+can be restored from. The repository itself is never removed.
+
+PATH is a project path or the name of a session directory, as with -s;
+sessions of the project's subdirectories are named on their own. The
+session directory of an existing project can be removed too. When the
+project is gone, its entry in .claude.json goes to the trash along with
+the session directory.
+
+Before removing, the program shows the plan and asks; Return means "no".
+Without a terminal to ask on, --yes is needed. While Claude Code is
+running, nothing changes.
+
+The trash: ~/Library/Application Support/csm/trash on macOS,
+$XDG_DATA_HOME/csm/trash (~/.local/share/csm/trash by default) on Linux.
+
+  -n, --dry-run   show the planned changes, change nothing
+  -y, --yes       remove without asking
+@ restore
+csm -u [-n] [ENTRY] — without an argument lists the trash, with one puts
+the entry back.
+
+The list gives the entry's name, the time of removal, its size and its
+project, and under it the size of the whole trash. ENTRY is a name from
+this list.
+
+The session directory goes back to its place. When a directory of that
+name exists, the two are merged; a file on both sides stays in the trash
+and is reported. The entry in .claude.json comes back unless the project
+has an entry there already. While Claude Code is running, nothing
+changes.
+
+  -n, --dry-run   show the planned changes, change nothing
+@ empty
+csm -E [-ny] [ENTRY...] — deletes the given entries from the trash for
+good, or the whole trash without arguments.
+
+Before deleting, the program shows the list and asks; Return means "no".
+The trash never empties itself.
+
+  -n, --dry-run   show what would be deleted, delete nothing
+  -y, --yes       delete without asking
+@ prune
+csm -P [-ny] [REPO...] — takes the paths that no longer exist out of
+githubRepoPaths in .claude.json.
+
+Claude Code remembers there where each GitHub repository (owner/repo)
+lies on this computer and never forgets a path, even one that is gone.
+Without arguments the paths of all repositories are checked, with them
+only those of the repositories named. A path that cannot be checked
+(no access, a disk not connected) stays.
+
+Before the change, the program shows the list and asks; Return means
+"no". The file is first copied to .claude.json.bak. When Claude Code
+is running, nothing changes.
+
+  -n, --dry-run   show what would go, change nothing
+  -y, --yes       remove without asking

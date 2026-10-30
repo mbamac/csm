@@ -1,0 +1,16 @@
+# macOS
+.DS_Store
+
+# Xcode — build products and per-user state
+build/
+
+# Claude Code — local, per-machine settings
+.claude/
+t/
+
+# Build products
+/csm
+
+# Private project notes stay local; only the README is published
+*.md
+!README.md
