@@ -39,6 +39,7 @@ size_t text_width(const char *s);
 char *text_fit(const char *s, size_t width);
 char **text_wrap(const char *text, size_t len, size_t width, size_t *count);
 void text_lines_free(char **lines, size_t n);
+char *format_version_warning(const char *version);
 char *format_state(enum dir_state state);
 char *format_project(const struct session_dir_info *d, const char *home);
 char *format_entry_project(const struct trash_entry *e, const char *home);

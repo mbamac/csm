@@ -31,6 +31,9 @@
 /* Longest first prompt Claude Code keeps, in characters, before "…". */
 #define SESSION_PROMPT_MAX 200
 
+/* The Claude Code version csm was last checked against. */
+#define SESSION_TESTED_VERSION "2.1.314"
+
 /* Where Claude Code keeps its data for this user. */
 struct claude_paths {
 	char *home;		/* NULL when unknown */
@@ -46,6 +49,7 @@ struct session_info {
 	time_t modified;	/* the file's mtime */
 	size_t messages;
 	char *branch;		/* last gitBranch; NULL when none */
+	char *title;		/* name given with /rename; NULL when none */
 	char *prompt;		/* first user prompt; NULL when none */
 };
 
@@ -59,5 +63,7 @@ int session_info_read(const char *file, struct session_info *info);
 void session_info_free(struct session_info *info);
 int session_compare(const void *a, const void *b);
 char *session_prompt(const char *text, char **fallback);
+char *session_claude_version(const char *projects_dir);
+int session_version_compare(const char *a, const char *b);
 
 #endif

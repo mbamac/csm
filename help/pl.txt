@@ -64,6 +64,11 @@ a widok w $XDG_STATE_HOME/csm (domyślnie ~/.local/state/csm).
 daje motywom jasnemu i ciemnemu dokładne kolory; bez niej biorą
 najbliższe z 256.
 
+Wersja Claude Code: csm sprawdzono z jedną wersją Claude Code. Gdy
+sesje zapisuje inna, przed każdą zmianą pojawia się ostrzeżenie z obiema
+wersjami (w interfejsie pełnoekranowym — żółty wiersz pod tytułem);
+zmiana i tak się wykona.
+
 Kod wyjścia: 0 sukces, 1 błąd części operacji, 2 błędne użycie,
 3 Claude Code działa.
 @ list
@@ -90,7 +95,8 @@ csm -s ŚCIEŻKA — pokazuje szczegóły projektu i jego sesje, od najnowszej.
 od „-”, więc stoi po „--”: csm -s -- -Users-ja-repo.
 
 Dla każdej sesji: kiedy się zaczęła i kiedy ostatnio zmieniła, liczba
-wiadomości, gałąź git i pierwszy prompt, skrócony do szerokości terminala.
+wiadomości, gałąź git, nazwa sesji (nadana przez /rename) i pierwszy
+prompt, skrócony do szerokości terminala.
 
 Przy osieroconym projekcie pokazuje też, gdzie projekt może być teraz:
 inne ścieżki jego repozytorium GitHub i katalogi o tej samej nazwie obok

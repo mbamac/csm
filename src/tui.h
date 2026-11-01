@@ -36,8 +36,11 @@
 #include "trash.h"
 #include "uistate.h"
 
-/* Columns of the list and of the session table. */
+/* Columns of the list. */
 #define TUI_COLUMNS 5
+
+/* Columns of the session table; the last one, the first prompt, flexes. */
+#define TUI_SESSION_COLUMNS 6
 
 /* Columns of the trash list: entry, removed, size, project. */
 #define TRASH_COLUMNS 4
@@ -100,8 +103,8 @@ struct tui_row {
 struct tui_details {
 	int loaded;
 	size_t count;
-	char **cells;		/* count rows of TUI_COLUMNS */
-	size_t widths[TUI_COLUMNS];
+	char **cells;		/* count rows of TUI_SESSION_COLUMNS */
+	size_t widths[TUI_SESSION_COLUMNS];
 };
 
 /* The trash, read when its screen opens and after each change. */
@@ -150,6 +153,7 @@ struct tui {
 	int (*claude_now)(void);	/* the look right before a change */
 	char *claude_error;
 	size_t github_dead;	/* githubRepoPaths that no longer exist */
+	char *version_warning;	/* another Claude Code version; NULL when not */
 	char *error;		/* the result of the last key, until the next */
 	char *warning;
 	char *info;
@@ -219,7 +223,7 @@ void tui_save_state(struct tui *t);
 int tui_run(void);
 
 /* Shared by tui.c and tui_draw.c. */
-extern const char *const tui_session_headers[TUI_COLUMNS];
+extern const char *const tui_session_headers[TUI_SESSION_COLUMNS];
 size_t tui_selected(const struct tui *t);
 void tui_make_buttons(struct tui *t);
 size_t tui_list_rows(const struct tui *t, size_t body);

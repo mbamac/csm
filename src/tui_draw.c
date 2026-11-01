@@ -63,7 +63,7 @@ static const char *const trash_headers[TRASH_COLUMNS] = {
 
 /* Columns that give up their room first when the flexible one is narrow. */
 static const size_t list_drop[] = { SORT_MODIFIED, SORT_SIZE, SORT_SESSIONS };
-static const size_t session_drop[] = { 3, 0, 2 };
+static const size_t session_drop[] = { 3, 0, 2, 4 };
 static const size_t trash_drop[] = { 2, 1 };
 
 /* The title of the lower panel while a change is prepared, per action. */
@@ -215,6 +215,22 @@ static struct attr row_attr(const struct tui *t, const struct screen *s,
 		return chosen(t, s);
 	a.style = STYLE_BOLD;
 	return a;
+}
+
+/*
+ * The row under the title while Claude Code is another version than csm
+ * was checked against: on every screen, until the version is checked.
+ */
+static void draw_notice(struct tui *t, struct screen *s, size_t y)
+{
+	struct attr a = style(palette(t)->notice_fg, STYLE_BOLD);
+
+	if (s->color)
+		a.bg = palette(t)->notice;
+	else
+		a.style |= STYLE_REVERSE;
+	screen_text(s, 0, y, s->cols, "", a, 0);
+	screen_text(s, 1, y, s->cols - 1, t->version_warning, a, 0);
 }
 
 static void draw_title(struct tui *t, struct screen *s)
@@ -400,8 +416,8 @@ static void draw_details(struct tui *t, struct screen *s, size_t y0,
 	const struct session_dir_info *d;
 	struct tui_details *det;
 	struct attr head = style(COLOR_DEFAULT, STYLE_BOLD), row;
-	char *value, *headers[TUI_COLUMNS];
-	size_t widths[TUI_COLUMNS], x, c, n, i;
+	char *value, *headers[TUI_SESSION_COLUMNS];
+	size_t widths[TUI_SESSION_COLUMNS], x, c, n, i;
 
 	t->detail_rows = rows > DETAIL_HEAD ? rows - DETAIL_HEAD : 0;
 	t->table_y = y0 + DETAIL_HEAD;
@@ -437,13 +453,13 @@ static void draw_details(struct tui *t, struct screen *s, size_t y0,
 		    plain, 0);
 		return;
 	}
-	for (c = 0; c < TUI_COLUMNS; c++)
+	for (c = 0; c < TUI_SESSION_COLUMNS; c++)
 		headers[c] = xstrdup(msg(tui_session_headers[c]));
-	tui_fit_columns(det->widths, TUI_COLUMNS, 4, session_drop,
+	tui_fit_columns(det->widths, TUI_SESSION_COLUMNS, 5, session_drop,
 	    sizeof session_drop / sizeof session_drop[0], s->cols, widths);
-	draw_row(s, 0, y0 + DETAIL_HEAD - 1, headers, widths, TUI_COLUMNS,
-	    1U << 2, head, NULL);
-	for (c = 0; c < TUI_COLUMNS; c++)
+	draw_row(s, 0, y0 + DETAIL_HEAD - 1, headers, widths,
+	    TUI_SESSION_COLUMNS, 1U << 2, head, NULL);
+	for (c = 0; c < TUI_SESSION_COLUMNS; c++)
 		free(headers[c]);
 	if (t->detail_follow)
 		scroll_to(&t->detail_top, t->detail_cursor, t->detail_rows);
@@ -453,8 +469,8 @@ static void draw_details(struct tui *t, struct screen *s, size_t y0,
 		if (t->focus == FOCUS_DETAILS && t->detail_top + n == t->detail_cursor)
 			row = chosen(t, s);
 		draw_row(s, 0, y0 + DETAIL_HEAD + n,
-		    det->cells + (t->detail_top + n) * TUI_COLUMNS, widths,
-		    TUI_COLUMNS, 1U << 2, row, NULL);
+		    det->cells + (t->detail_top + n) * TUI_SESSION_COLUMNS, widths,
+		    TUI_SESSION_COLUMNS, 1U << 2, row, NULL);
 	}
 }
 
@@ -982,7 +998,7 @@ static void draw_status(struct tui *t, struct screen *s, size_t y)
  */
 void tui_render(struct tui *t, struct screen *s)
 {
-	size_t body, list, x;
+	size_t body, list, x, notice;
 	const char *line;
 
 	screen_colors(s, palette(t)->fg, palette(t)->bg);
@@ -995,19 +1011,22 @@ void tui_render(struct tui *t, struct screen *s)
 		t->buttons_y = t->status_y = t->sep_y = t->answers_y = NONE;
 		return;
 	}
-	body = s->rows - CHROME_ROWS;
+	notice = t->version_warning != NULL ? 1 : 0;
+	body = s->rows - CHROME_ROWS - notice;
 	list = tui_list_rows(t, body);
 	t->body_rows = body;
-	t->list_y = 1;
+	t->list_y = 1 + notice;
 	t->list_rows = list;
-	t->sep_y = 2 + list;
-	t->lower_y = 3 + list;
+	t->sep_y = t->list_y + 1 + list;
+	t->lower_y = t->list_y + 2 + list;
 	t->lower_rows = body - list;
 	t->items_y = t->lower_y;
 	t->detail_rows = 0;
 	t->buttons_y = s->rows - 2;
 	t->status_y = s->rows - 1;
 	draw_title(t, s);
+	if (notice)
+		draw_notice(t, s, 1);
 	if (t->screen == SCREEN_HELP) {
 		t->list_rows = t->lower_rows = 0;
 		t->sep_y = NONE;

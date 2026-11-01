@@ -65,6 +65,11 @@ Environment: NO_COLOR turns the colours off. COLORTERM=truecolor (or
 24bit) gives the light and dark themes their exact colours; without it
 they use the nearest of 256.
 
+Claude Code version: csm was checked with one version of Claude Code.
+When another one writes the sessions, a warning with both versions comes
+before each change (in the full-screen interface, a yellow row under the
+title); the change goes ahead all the same.
+
 Exit status: 0 success, 1 part of the operation failed, 2 wrong usage,
 3 Claude Code is running.
 @ list
@@ -91,8 +96,8 @@ PATH is a project path or the name of a session directory; a name starts
 with "-", so it comes after "--": csm -s -- -Users-me-repo.
 
 For each session: when it started and last changed, the number of
-messages, the git branch and the first prompt, cut to the width of the
-terminal.
+messages, the git branch, the session name (given with /rename) and the
+first prompt, cut to the width of the terminal.
 
 For an orphaned project it also lists where the project may be now:
 other paths of its GitHub repository and directories of the same name

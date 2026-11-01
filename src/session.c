@@ -349,6 +349,8 @@ struct line_facts {
 	char *type;
 	char *timestamp;
 	char *branch;
+	char *custom_title;	/* customTitle of a custom-title record */
+	char *ai_title;		/* aiTitle of an ai-title record */
 	int is_meta;
 	char *content;		/* message.content when it is a string */
 	struct block *blocks;	/* message.content when it is an array */
@@ -385,6 +387,10 @@ static void collect_facts(const struct json_token *tok, void *ctx)
 			set_string(&f->timestamp, f, tok);
 		else if (strcmp(p[0].key, "gitBranch") == 0)
 			set_string(&f->branch, f, tok);
+		else if (strcmp(p[0].key, "customTitle") == 0)
+			set_string(&f->custom_title, f, tok);
+		else if (strcmp(p[0].key, "aiTitle") == 0)
+			set_string(&f->ai_title, f, tok);
 		else if (strcmp(p[0].key, "isMeta") == 0)
 			f->is_meta = tok->kind == JSON_LITERAL &&
 			    tok->end - tok->start == 4 &&
@@ -426,6 +432,8 @@ static void facts_free(struct line_facts *f)
 	free(f->type);
 	free(f->timestamp);
 	free(f->branch);
+	free(f->custom_title);
+	free(f->ai_title);
 	free(f->content);
 }
 
@@ -625,17 +633,141 @@ static char *line_prompt(const struct line_facts *f, char **fallback)
 	return prompt;
 }
 
+/* Whether s looks like a version: digits, letters, dots, "+" and "-". */
+static int version_like(const char *s)
+{
+	size_t n;
+
+	for (n = 0; s[n] != '\0'; n++)
+		if (!((s[n] >= '0' && s[n] <= '9') ||
+		    (s[n] >= 'a' && s[n] <= 'z') ||
+		    (s[n] >= 'A' && s[n] <= 'Z') ||
+		    s[n] == '.' || s[n] == '+' || s[n] == '-'))
+			return 0;
+	return n > 0 && n <= 32;
+}
+
+/* The last top-level "version" in a tail chunk; NULL when none. */
+static char *tail_version(char *buf, size_t len, int mid_line)
+{
+	char *p = buf, *line, *v, *last = NULL;
+
+	if (mid_line) {
+		p = memchr(buf, '\n', len);
+		if (p == NULL)
+			return NULL;
+		p++;
+	}
+	while ((line = next_line(&p, buf + len, 1)) != NULL) {
+		if (strstr(line, "\"version\"") == NULL)
+			continue;
+		v = json_top_string(line, "version");
+		if (v != NULL && version_like(v)) {
+			free(last);
+			last = v;
+		} else {
+			free(v);
+		}
+	}
+	return last;
+}
+
+/*
+ * The Claude Code version that wrote the newest session file: the last
+ * top-level "version" in its final SESSION_CHUNK bytes, as message lines
+ * carry it. Only <uuid>.jsonl files directly in the session directories
+ * count. NULL when no file has one.
+ */
+char *session_claude_version(const char *projects_dir)
+{
+	struct stat st;
+	char **dirs, **files, *newest = NULL, *buf, *version = NULL;
+	size_t ndirs, nfiles, i, j, len;
+	time_t best = 0;
+	off_t offset;
+	int fd;
+
+	dirs = list_entries(projects_dir, 1, &ndirs);
+	for (i = 0; i < ndirs; i++) {
+		files = list_entries(dirs[i], 0, &nfiles);
+		for (j = 0; j < nfiles; j++) {
+			if (stat(files[j], &st) != 0 ||
+			    (newest != NULL && st.st_mtime < best))
+				continue;
+			free(newest);
+			newest = xstrdup(files[j]);
+			best = st.st_mtime;
+		}
+		free_entries(files, nfiles);
+	}
+	free_entries(dirs, ndirs);
+	if (newest == NULL)
+		return NULL;
+	fd = open(newest, O_RDONLY);
+	free(newest);
+	if (fd < 0)
+		return NULL;
+	if (fstat(fd, &st) == 0) {
+		offset = st.st_size > SESSION_CHUNK ?
+		    st.st_size - SESSION_CHUNK : 0;
+		buf = read_chunk(fd, offset, &len);
+		if (buf != NULL)
+			version = tail_version(buf, len, offset > 0);
+		free(buf);
+	}
+	close(fd);
+	return version;
+}
+
+/*
+ * Compares versions part by part, numbers by value ("2.1.10" is after
+ * "2.1.9"), anything else byte by byte; <0, 0 or >0 as strcmp.
+ */
+int session_version_compare(const char *a, const char *b)
+{
+	unsigned long x, y;
+	char *ea, *eb;
+
+	while (*a != '\0' && *b != '\0') {
+		if (*a >= '0' && *a <= '9' && *b >= '0' && *b <= '9') {
+			x = strtoul(a, &ea, 10);
+			y = strtoul(b, &eb, 10);
+			if (x != y)
+				return x < y ? -1 : 1;
+			a = ea;
+			b = eb;
+			continue;
+		}
+		if (*a != *b)
+			return (unsigned char)*a < (unsigned char)*b ? -1 : 1;
+		a++;
+		b++;
+	}
+	return (*a != '\0') - (*b != '\0');
+}
+
+/* Replaces *slot with a copy of value, unless value is missing or empty. */
+static void keep_last(char **slot, const char *value)
+{
+	if (value == NULL || value[0] == '\0')
+		return;
+	free(*slot);
+	*slot = xstrdup(value);
+}
+
 /*
  * What csm -s shows about one session file. The message count needs the
  * whole file, so the rest comes from the same pass: the first user or
- * assistant timestamp, the last gitBranch and the first prompt. Lines that
+ * assistant timestamp, the last gitBranch, the name and the first prompt.
+ * The name is the last customTitle, else the last aiTitle; Claude Code
+ * appends them again with every metadata write. Lines that
  * are not valid JSON (a last line still being written) are skipped.
  */
 int session_info_read(const char *file, struct session_info *info)
 {
 	struct line_facts f;
 	struct stat st;
-	char *line = NULL, *fallback = NULL, *base;
+	char *line = NULL, *fallback = NULL, *ai_title = NULL, *base;
 	size_t cap = 0;
 	ssize_t len;
 	time_t t;
@@ -669,16 +801,19 @@ int session_info_read(const char *file, struct session_info *info)
 		    strcmp(f.type, "assistant") == 0) &&
 		    parse_iso(f.timestamp, &t) == 0)
 			info->started = t;
-		if (f.branch != NULL && f.branch[0] != '\0') {
-			free(info->branch);
-			info->branch = xstrdup(f.branch);
-		}
+		keep_last(&info->branch, f.branch);
+		keep_last(&info->title, f.custom_title);
+		keep_last(&ai_title, f.ai_title);
 		if (info->prompt == NULL)
 			info->prompt = line_prompt(&f, &fallback);
 		facts_free(&f);
 	}
 	free(line);
 	fclose(fp);
+	if (info->title == NULL)
+		info->title = ai_title;
+	else
+		free(ai_title);
 	if (info->prompt == NULL)
 		info->prompt = fallback;
 	else
@@ -690,6 +825,7 @@ void session_info_free(struct session_info *info)
 {
 	free(info->id);
 	free(info->branch);
+	free(info->title);
 	free(info->prompt);
 	memset(info, 0, sizeof *info);
 }

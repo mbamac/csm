@@ -46,7 +46,7 @@ already been moved.
 - **List** session directories with their state (active, orphaned,
   unavailable, unknown), number of sessions, size and last change.
 - **Show** a project's sessions: start and last change, number of messages,
-  git branch and the first prompt.
+  git branch, session name and the first prompt.
 - **Move** a repository together with its sessions: session directories of
   the repository and its subdirectories, the `cwd` fields in the
   transcripts and the entries in `.claude.json`.

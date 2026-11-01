@@ -33,6 +33,7 @@
 #include "inventory.h"
 #include "msg.h"
 #include "path.h"
+#include "session.h"
 #include "util.h"
 
 #define ELLIPSIS "\342\200\246"
@@ -388,6 +389,23 @@ void text_lines_free(char **lines, size_t n)
 	for (i = 0; i < n; i++)
 		free(lines[i]);
 	free(lines);
+}
+
+/*
+ * The warning that Claude Code is not the version csm was checked
+ * against, or NULL when it is or when the version is unknown.
+ */
+char *format_version_warning(const char *version)
+{
+	int c;
+
+	if (version == NULL)
+		return NULL;
+	c = session_version_compare(version, SESSION_TESTED_VERSION);
+	if (c == 0)
+		return NULL;
+	return msg_text(c > 0 ? "warn.version.newer" : "warn.version.other",
+	    version, SESSION_TESTED_VERSION);
 }
 
 /* The state of a session directory, as every view names it. */

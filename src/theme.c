@@ -36,27 +36,29 @@ const struct theme_colors theme_light = {
 	COLOR_RGB(0x1f1f1f), COLOR_RGB(0xffffff), COLOR_RGB(0xc62828),
 	COLOR_RGB(0x9a6700), COLOR_RGB(0xa0a0a0), COLOR_RGB(0xe0e0e0),
 	COLOR_RGB(0x8a8a8a), COLOR_RGB(0xb8d4f8), COLOR_RGB(0xe4e4e4),
-	STYLE_BOLD
+	COLOR_RGB(0xffd54f), COLOR_RGB(0x1f1f1f), STYLE_BOLD
 };
 
 const struct theme_colors theme_dark = {
 	COLOR_RGB(0xd4d4d4), COLOR_RGB(0x1e1e1e), COLOR_RGB(0xf47067),
 	COLOR_RGB(0xe5c07b), COLOR_RGB(0x6e6e6e), COLOR_RGB(0x3c3c3c),
-	COLOR_RGB(0x8a8a8a), COLOR_RGB(0x264f78), COLOR_RGB(0x3a3a3a), 0
+	COLOR_RGB(0x8a8a8a), COLOR_RGB(0x264f78), COLOR_RGB(0x3a3a3a),
+	COLOR_RGB(0xe5c07b), COLOR_RGB(0x1e1e1e), 0
 };
 
 /*
  * System keeps the terminal's text and background and takes the marks
  * from its 16 colours. The 16 have no grey or blue that is sure to stand
  * out from the terminal's background, so the bars, the chosen row and
- * the border take the 256.
+ * the border take the 256. The notice row is black on the terminal's
+ * yellow, which both kinds of background keep readable.
  */
 const struct theme_colors theme_system_light = {
 	COLOR_DEFAULT, COLOR_DEFAULT, COLOR_RED, COLOR_YELLOW, COLOR_GRAY,
-	254, 244, 153, 253, STYLE_BOLD
+	254, 244, 153, 253, COLOR_YELLOW, 0, STYLE_BOLD
 };
 
 const struct theme_colors theme_system_dark = {
 	COLOR_DEFAULT, COLOR_DEFAULT, COLOR_BRIGHT_RED, COLOR_BRIGHT_YELLOW,
-	COLOR_GRAY, 236, 245, 24, 237, 0
+	COLOR_GRAY, 236, 245, 24, 237, COLOR_BRIGHT_YELLOW, 0, 0
 };

@@ -141,6 +141,8 @@ PROJ=$CLAUDE_CONFIG_DIR/projects
 mkdir -p "$HOME/repo" "$PROJ/-repo" "$PROJ/-gone" "$PROJ/-mem/memory"
 printf '{"type":"user","cwd":"%s","gitBranch":"main","timestamp":"2026-10-27T20:00:00Z","message":{"content":"hello there"}}\n' \
     "$HOME/repo" > "$PROJ/-repo/s1.jsonl"
+printf '{"type":"custom-title","customTitle":"first try","sessionId":"s1"}\n' \
+    >> "$PROJ/-repo/s1.jsonl"
 printf '{"type":"user","cwd":"%s","message":{"content":"bye"}}\n' \
     "$HOME/gone" > "$PROJ/-gone/s2.jsonl"
 expect 0 '^STATE  *SESSIONS  *SIZE  *LAST CHANGE  *PROJECT$' -l
@@ -152,7 +154,9 @@ expect 0 '"path":"'"$HOME"'/gone","state":"orphan","sessions":1' -lj
 expect 0 '"dir":"-mem","path":null,"state":"unknown"' -lj
 expect 0 '^Project: ~/repo$' -s "$HOME/repo"
 expect 0 '^State: active$' -s "$HOME/repo"
-expect 0 'main  *hello there$' -s "$HOME/repo"
+expect 0 ' BRANCH  *NAME  *FIRST PROMPT$' -s "$HOME/repo"
+expect 0 'main  *first try  *hello there$' -s "$HOME/repo"
+expect 0 '–  *–  *bye$' -s -- -gone
 expect 0 '^Session directory: -gone$' -s -- -gone
 expect 0 '^Project: –$' -s -- -mem
 expect 1 '^csm: there are no sessions for “nowhere”' -s nowhere

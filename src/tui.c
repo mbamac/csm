@@ -52,9 +52,9 @@ _Static_assert(UI_SORTS == TUI_COLUMNS, "every list column has a word");
 
 static void restore_state(struct tui *t);
 
-const char *const tui_session_headers[TUI_COLUMNS] = {
+const char *const tui_session_headers[TUI_SESSION_COLUMNS] = {
 	"show.col.started", "show.col.modified", "show.col.messages",
-	"show.col.branch", "show.col.prompt"
+	"show.col.branch", "show.col.title", "show.col.prompt"
 };
 
 static int ascii_lower(int c)
@@ -223,7 +223,7 @@ static void free_details(struct tui_details *d)
 
 	if (!d->loaded)
 		return;
-	for (i = 0; i < d->count * TUI_COLUMNS; i++)
+	for (i = 0; i < d->count * TUI_SESSION_COLUMNS; i++)
 		free(d->cells[i]);
 	free(d->cells);
 	d->loaded = 0;
@@ -255,12 +255,16 @@ void tui_scan(struct tui *t)
 {
 	struct session_dir_info *d;
 	struct github_entry *gh;
-	char *keep = NULL, *shown;
+	char *keep = NULL, *shown, *version;
 	size_t i, c, w, n, index = NONE;
 
 	if (t->view_count > 0)
 		keep = xstrdup(t->inv.dirs[tui_selected(t)].name);
 	free_scan(t);
+	free(t->version_warning);
+	version = session_claude_version(t->paths.projects_dir);
+	t->version_warning = format_version_warning(version);
+	free(version);
 	if (inventory_scan(t->paths.projects_dir, &t->inv) != 0) {
 		shown = path_tilde(t->paths.projects_dir, t->paths.home);
 		set_text(&t->error, msg_text("error.read", shown,
@@ -474,26 +478,28 @@ void tui_load(struct tui *t, size_t dir)
 	}
 	session_files_free(files, count);
 	qsort(infos, n, sizeof *infos, session_compare);
-	d->cells = xmalloc((n * TUI_COLUMNS + 1) * sizeof *d->cells);
-	for (c = 0; c < TUI_COLUMNS; c++)
+	d->cells = xmalloc((n * TUI_SESSION_COLUMNS + 1) * sizeof *d->cells);
+	for (c = 0; c < TUI_SESSION_COLUMNS; c++)
 		d->widths[c] = text_width(msg(tui_session_headers[c]));
 	for (i = 0; i < n; i++) {
-		row = d->cells + i * TUI_COLUMNS;
+		row = d->cells + i * TUI_SESSION_COLUMNS;
 		row[0] = format_time(infos[i].started);
 		row[1] = format_time(infos[i].modified);
 		row[2] = format_count(infos[i].messages);
 		row[3] = infos[i].branch != NULL ? text_clean(infos[i].branch) :
 		    xstrdup(msg("value.none"));
-		row[4] = infos[i].prompt != NULL ? text_clean(infos[i].prompt) :
+		row[4] = infos[i].title != NULL ? text_clean(infos[i].title) :
 		    xstrdup(msg("value.none"));
-		for (c = 0; c < TUI_COLUMNS; c++) {
+		row[5] = infos[i].prompt != NULL ? text_clean(infos[i].prompt) :
+		    xstrdup(msg("value.none"));
+		for (c = 0; c < TUI_SESSION_COLUMNS; c++) {
 			w = text_width(row[c]);
 			if (w > d->widths[c])
 				d->widths[c] = w;
 		}
 		session_info_free(&infos[i]);
 	}
-	for (c = 0; c < TUI_COLUMNS - 1; c++)
+	for (c = 0; c < TUI_SESSION_COLUMNS - 1; c++)
 		if (d->widths[c] > MAX_COLUMN)
 			d->widths[c] = MAX_COLUMN;
 	free(infos);
@@ -1756,6 +1762,7 @@ void tui_free(struct tui *t)
 	free_trash(&t->trash);
 	clear_messages(t);
 	free(t->claude_error);
+	free(t->version_warning);
 	free(t->settings_path);
 	free(t->state_path);
 	free(t->state_saved);

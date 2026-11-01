@@ -1206,6 +1206,30 @@ static void test_session_info(void)
 	CHECK_STR(info.prompt, "/clear");
 	CHECK(info.started == 0);
 	CHECK(info.branch == NULL);
+	CHECK(info.title == NULL);
+	session_info_free(&info);
+	free(file);
+
+	/* The last given name wins; an empty one does not clear it. */
+	write_file(dir, "s4.jsonl",
+	    "{\"type\":\"ai-title\",\"aiTitle\":\"Fixing bugs\"}\n"
+	    "{\"type\":\"custom-title\",\"customTitle\":\"stage 1\"}\n"
+	    "{\"type\":\"custom-title\",\"customTitle\":\"stage 2\"}\n"
+	    "{\"type\":\"custom-title\",\"customTitle\":\"\"}\n"
+	    "{\"type\":\"ai-title\",\"aiTitle\":\"Later\"}\n");
+	file = xjoin(dir, "s4.jsonl");
+	CHECK(session_info_read(file, &info) == 0);
+	CHECK_STR(info.title, "stage 2");
+	session_info_free(&info);
+	free(file);
+
+	/* Without a name of its own, the one Claude gave it. */
+	write_file(dir, "s5.jsonl",
+	    "{\"type\":\"ai-title\",\"aiTitle\":\"Fixing bugs\"}\n"
+	    "{\"type\":\"ai-title\",\"aiTitle\":\"Fixing the parser\"}\n");
+	file = xjoin(dir, "s5.jsonl");
+	CHECK(session_info_read(file, &info) == 0);
+	CHECK_STR(info.title, "Fixing the parser");
 	session_info_free(&info);
 	free(file);
 
@@ -1232,6 +1256,69 @@ static void test_session_info(void)
 	free(x250);
 	free(x200);
 	free(dir);
+}
+
+static void test_version(void)
+{
+	struct timespec times[2];
+	char *base, *a, *b, *sub, *file, *v;
+
+	CHECK(session_version_compare("2.1.314", "2.1.314") == 0);
+	CHECK(session_version_compare("2.1.316", "2.1.314") > 0);
+	CHECK(session_version_compare("2.1.9", "2.1.10") < 0);
+	CHECK(session_version_compare("2.2.0", "2.1.999") > 0);
+	CHECK(session_version_compare("2.1", "2.1.0") < 0);
+	CHECK(session_version_compare("2.1.0-beta", "2.1.0") > 0);
+
+	base = make_dir(work, "version");
+	CHECK(session_claude_version(base) == NULL);
+	a = make_dir(base, "-a");
+	b = make_dir(base, "-b");
+	write_file(a, "old.jsonl", "{\"type\":\"user\",\"version\":\"2.1.200\"}\n");
+	write_file(b, "new.jsonl",
+	    "{\"type\":\"user\",\"version\":\"2.1.300\"}\n"
+	    "{\"type\":\"user\",\"message\":{\"version\":\"9\"}}\n"
+	    "{\"type\":\"user\",\"version\":\"2.1.316\"}\n"
+	    "{\"type\":\"custom-title\",\"customTitle\":\"x\"}\n");
+	/* Files below a session directory do not count, however new. */
+	sub = make_dir(b, "uuid");
+	write_file(sub, "agent.jsonl", "{\"type\":\"user\",\"version\":\"7\"}\n");
+	times[0].tv_sec = times[1].tv_sec = 1793131200;
+	times[0].tv_nsec = times[1].tv_nsec = 0;
+	file = xjoin(a, "old.jsonl");
+	CHECK(utimensat(AT_FDCWD, file, times, 0) == 0);
+	free(file);
+	CHECK_OWNED(session_claude_version(base), "2.1.316");
+
+	/* The newest file decides, even when it has no version. */
+	times[0].tv_sec = times[1].tv_sec = 1893456000;
+	write_file(a, "newer.jsonl", "{\"type\":\"user\"}\n");
+	file = xjoin(a, "newer.jsonl");
+	CHECK(utimensat(AT_FDCWD, file, times, 0) == 0);
+	free(file);
+	CHECK(session_claude_version(base) == NULL);
+
+	/* What is not a version is not shown. */
+	write_file(a, "newer.jsonl",
+	    "{\"type\":\"user\",\"version\":\"\\u001b[2J\"}\n");
+	file = xjoin(a, "newer.jsonl");
+	CHECK(utimensat(AT_FDCWD, file, times, 0) == 0);
+	free(file);
+	CHECK(session_claude_version(base) == NULL);
+
+	CHECK(format_version_warning(NULL) == NULL);
+	CHECK(format_version_warning(SESSION_TESTED_VERSION) == NULL);
+	v = format_version_warning("99.0.0");
+	CHECK(v != NULL && strstr(v, "new version, 99.0.0") != NULL &&
+	    strstr(v, SESSION_TESTED_VERSION) != NULL);
+	free(v);
+	v = format_version_warning("1.0.0");
+	CHECK(v != NULL && strstr(v, "is version 1.0.0") != NULL);
+	free(v);
+	free(sub);
+	free(a);
+	free(b);
+	free(base);
 }
 
 static void test_inventory(void)
@@ -2377,9 +2464,24 @@ static void test_tui(void)
 	tui_render(&t, &s);
 	CHECK(line_has(&s, 13, "State: active"));
 	CHECK(line_has(&s, 13, "Sessions: 2"));
-	CHECK(line_has(&s, 14, "FIRST PROMPT"));
+	CHECK(line_has(&s, 14, "NAME  FIRST PROMPT"));
 	CHECK(line_has(&s, 15, "Hello alpha"));
 	CHECK(line_has(&s, 16, "Hello alpha"));
+
+	/* Another Claude Code version: a yellow row under the title. */
+	t.version_warning = xstrdup("Claude Code is version 9.9.9");
+	tui_render(&t, &s);
+	CHECK(line_has(&s, 1, "Claude Code is version 9.9.9"));
+	CHECK(s.back[1 * s.cols].attr.bg == tui_theme(&t)->notice);
+	CHECK(s.back[1 * s.cols + s.cols - 1].attr.bg ==
+	    tui_theme(&t)->notice);
+	CHECK(line_has(&s, 2, "PROJECT"));
+	CHECK(t.list_y == 2);
+	CHECK(line_has(&s, 18, "m Move"));
+	free(t.version_warning);
+	t.version_warning = NULL;
+	tui_render(&t, &s);
+	CHECK(line_has(&s, 1, "PROJECT"));
 
 	/* Moving and sorting keep the selected directory. */
 	press_key(&t, KEY_DOWN);
@@ -3217,7 +3319,7 @@ static void test_remember(void)
 	struct screen s;
 	char *base, *config, *projects, *saved, *data, *file;
 	const char *names[] = { "-a-one", "-b-two", "-c-three", "-d-four" };
-	size_t i, len, top;
+	size_t i, len, top, narrow;
 
 	saved = xstrdup(getenv("CLAUDE_CONFIG_DIR"));
 	base = make_dir(work, "remember");
@@ -3328,10 +3430,13 @@ static void test_remember(void)
 	CHECK(t.help_top == 3);
 	press_key(&t, KEY_PAGE_UP);
 	CHECK(t.help_top == 0);
-	/* A wider window wraps again. */
+	/* A wider window wraps again, into fewer lines. */
+	narrow = t.help_count;
 	screen_resize(&s, 100, 12);
 	tui_render(&t, &s);
-	CHECK(t.help_width == 98 && t.help_count == 64);
+	CHECK(t.help_width == 98 && t.help_count < narrow);
+	for (i = 0; i < t.help_count; i++)
+		CHECK(text_width(t.help_lines[i]) <= 98);
 	click_at(&t, t.buttons[0].x0, 10, 0, 0);
 	CHECK(t.screen == SCREEN_LIST);
 	/* From the trash and the settings, and back to them. */
@@ -3398,6 +3503,7 @@ int main(int argc, char **argv)
 	test_format();
 	test_state();
 	test_session_info();
+	test_version();
 	test_inventory();
 	test_cli();
 	test_msg();

@@ -295,12 +295,30 @@ static void print_plan(const struct move_ctx *ctx)
 	report_free(&r);
 }
 
+/*
+ * Before a change: one line when Claude Code is not the version csm was
+ * checked against. It only warns; the change goes on.
+ */
+static void warn_version(const char *projects_dir)
+{
+	char *version, *warning;
+
+	version = session_claude_version(projects_dir);
+	warning = format_version_warning(version);
+	if (warning != NULL) {
+		fprintf(stderr, "csm: %s\n", warning);
+		free(warning);
+	}
+	free(version);
+}
+
 /* Claude Code rewrites .claude.json when it quits, so changes wait for it. */
 static int check_claude(const struct move_ctx *ctx)
 {
 	char *config;
 	int r;
 
+	warn_version(ctx->projects_dir);
 	r = claude_running();
 	if (r < 0) {
 		msg_error("error.process", strerror(errno));
@@ -566,9 +584,9 @@ static char *text_or_none(const char *s)
 static int print_sessions(const struct session_dir_info *d,
     const struct claude_paths *paths)
 {
-	struct table t = { 5, 1U << 2, NULL, 0, 0 };
+	struct table t = { 6, 1U << 2, NULL, 0, 0 };
 	struct session_info *infos;
-	char **files, *row[5], *shown;
+	char **files, *row[6], *shown;
 	size_t count, n = 0, i;
 	int failed = 0;
 
@@ -591,14 +609,16 @@ static int print_sessions(const struct session_dir_info *d,
 		row[1] = xstrdup(msg("show.col.modified"));
 		row[2] = xstrdup(msg("show.col.messages"));
 		row[3] = xstrdup(msg("show.col.branch"));
-		row[4] = xstrdup(msg("show.col.prompt"));
+		row[4] = xstrdup(msg("show.col.title"));
+		row[5] = xstrdup(msg("show.col.prompt"));
 		table_add(&t, row);
 		for (i = 0; i < n; i++) {
 			row[0] = format_time(infos[i].started);
 			row[1] = format_time(infos[i].modified);
 			row[2] = format_count(infos[i].messages);
 			row[3] = text_or_none(infos[i].branch);
-			row[4] = text_or_none(infos[i].prompt);
+			row[4] = text_or_none(infos[i].title);
+			row[5] = text_or_none(infos[i].prompt);
 			table_add(&t, row);
 		}
 		fputc('\n', stdout);

@@ -27,10 +27,12 @@
  * terminal's own); the marks red (orphaned, errors), yellow
  * (unavailable, warnings) and grey (what does not work now); the bars
  * (title and buttons) with their grey for what is greyed out and for
- * the separators; the chosen row; the border between the panels.
+ * the separators; the chosen row; the border between the panels; the
+ * notice row under the title (its background and text).
  */
 struct theme_colors {
 	unsigned long fg, bg, red, yellow, grey, bar, bar_grey, select, line;
+	unsigned long notice, notice_fg;
 	unsigned char yellow_style;
 };
 
