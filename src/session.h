@@ -32,7 +32,7 @@
 #define SESSION_PROMPT_MAX 200
 
 /* The Claude Code version csm was last checked against. */
-#define SESSION_TESTED_VERSION "2.1.316"
+#define SESSION_TESTED_VERSION "2.1.319"
 
 /* Where Claude Code keeps its data for this user. */
 struct claude_paths {
