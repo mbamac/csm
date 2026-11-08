@@ -2613,6 +2613,29 @@ static int claude_on(void)
 	return 1;
 }
 
+/* t->paint in the tests: the status bar of each frame drawn mid-key. */
+struct painted {
+	struct screen *s;
+	char log[1024];
+	int alert;		/* a frame showed the Yes/No question */
+};
+
+static void paint_log(struct tui *t, void *arg)
+{
+	struct painted *p = arg;
+	char *line;
+
+	tui_render(t, p->s);
+	line = screen_line(p->s, p->s->rows - 1);
+	if (strlen(p->log) + strlen(line) + 2 < sizeof p->log) {
+		strcat(p->log, line);
+		strcat(p->log, "|");
+	}
+	free(line);
+	if (t->answers_y != (size_t)-1)
+		p->alert = 1;
+}
+
 static void mouse_at(struct tui *t, enum mouse_event ev, size_t x, size_t y,
     unsigned mods, long ms)
 {
@@ -2689,6 +2712,7 @@ static void test_tui_actions(void)
 {
 	struct tui t;
 	struct screen s;
+	struct painted painted = { NULL, "", 0 };
 	char *base, *config, *projects, *repo, *gone, *sub, *other, *moved;
 	char *found, *json, *data, *path, *saved, *line;
 	size_t cap, len, i;
@@ -2851,11 +2875,27 @@ static void test_tui_actions(void)
 	t.claude_now = claude_off;
 	tui_set_claude(&t, 0, 0);
 
+	/*
+	 * Each long step shows what it does before it starts: the plan, the
+	 * change, reading the lists again. The frame after says the result.
+	 */
 	pick(&t, &s, repo);
 	press_char(&t, "m");
 	field_set(&t.field, moved);
+	t.paint = paint_log;
+	t.paint_arg = &painted;
+	painted.s = &s;
+	painted.log[0] = '\0';
 	press_key(&t, KEY_ENTER);
+	CHECK_STR(painted.log, " Checking what will change \342\200\224 this may "
+	    "take a while\342\200\246|");
+	CHECK(t.busy == NULL);
+	painted.log[0] = '\0';
 	press_key(&t, KEY_ENTER);
+	CHECK_STR(painted.log, " Making the changes \342\200\224 this may take "
+	    "a while\342\200\246| Reading the list of projects\342\200\246|");
+	CHECK(t.busy == NULL);
+	t.paint = NULL;
 	CHECK(t.mode == MODE_BROWSE && !exists(repo) && exists(moved));
 	CHECK(view_of(&t, moved) != (size_t)-1);
 	tui_render(&t, &s);
@@ -2929,7 +2969,14 @@ static void test_tui_actions(void)
 	press_char(&t, "r");
 	press_key(&t, KEY_RIGHT);
 	CHECK(t.yes);
+	/* Once answered, the question is gone while the change runs. */
+	t.paint = paint_log;
+	painted.log[0] = '\0';
+	painted.alert = 0;
 	press_key(&t, KEY_ENTER);
+	CHECK(strstr(painted.log, "Making the changes") != NULL &&
+	    !painted.alert);
+	t.paint = NULL;
 	CHECK(view_of(&t, other) == (size_t)-1 && t.inv.count == 2);
 	CHECK(t.info != NULL && strstr(t.info, "in the trash: 1") != NULL);
 
