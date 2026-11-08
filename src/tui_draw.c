@@ -937,6 +937,10 @@ static void draw_status(struct tui *t, struct screen *s, size_t y)
 
 	t->answers_y = NONE;
 	t->no_x0 = t->no_x1 = t->yes_x0 = t->yes_x1 = 0;
+	if (t->busy != NULL) {
+		screen_text(s, 1, y, s->cols - 1, t->busy, plain, 0);
+		return;
+	}
 	if (t->mode == MODE_FILTER) {
 		clean = text_clean(t->filter);
 		line = msg_text("tui.filter", clean);
@@ -1069,6 +1073,7 @@ void tui_render(struct tui *t, struct screen *s)
 		draw_details(t, s, t->lower_y, t->lower_rows);
 	draw_buttons(t, s, t->buttons_y);
 	draw_status(t, s, t->status_y);
-	if (t->mode == MODE_PLAN && t->confirm)
+	/* Once answered, the question goes while the change runs. */
+	if (t->mode == MODE_PLAN && t->confirm && t->busy == NULL)
 		draw_alert(t, s);
 }

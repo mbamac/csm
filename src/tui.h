@@ -151,6 +151,14 @@ struct tui {
 	int claude;		/* Claude Code runs: changes are blocked */
 	int check_claude;	/* look again before the next frame */
 	int (*claude_now)(void);	/* the look right before a change */
+	/*
+	 * Draws a frame now, from inside a key: a long step (a plan, a
+	 * change, reading the lists again) says what it does before it
+	 * starts, as no other frame comes until it ends.
+	 */
+	void (*paint)(struct tui *t, void *arg);
+	void *paint_arg;
+	const char *busy;	/* the long step under way; NULL when none */
 	char *claude_error;
 	size_t github_dead;	/* githubRepoPaths that no longer exist */
 	char *version_warning;	/* another Claude Code version; NULL when not */

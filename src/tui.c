@@ -139,6 +139,18 @@ static void clear_messages(struct tui *t)
 }
 
 /*
+ * A long step starts: the status bar says so at once. With large
+ * session directories it takes seconds, and a screen that does not
+ * answer looks hung. NULL ends it; the next frame drops the text.
+ */
+static void busy(struct tui *t, const char *key)
+{
+	t->busy = key != NULL ? msg(key) : NULL;
+	if (key != NULL && t->paint != NULL)
+		t->paint(t, t->paint_arg);
+}
+
+/*
  * The order of two directories (indexes into the inventory, which comes
  * sorted by project). Numbers and dates go largest and newest first.
  */
@@ -941,9 +953,11 @@ static void start_plan(struct tui *t)
 #ifdef CSM_DEBUG
 	log_action(t, "plan");
 #endif
+	busy(t, "tui.busy.plan");
 	move_init(&ctx, 0);
 	run_action(t, &ctx, &t->preview);
 	move_free(&ctx);
+	busy(t, NULL);
 #ifdef CSM_DEBUG
 	log_report(&t->preview, "plan");
 #endif
@@ -1030,6 +1044,7 @@ static void execute(struct tui *t)
 #ifdef CSM_DEBUG
 	log_action(t, "execute");
 #endif
+	busy(t, "tui.busy.apply");
 	move_init(&ctx, 1);
 	run_action(t, &ctx, &r);
 	move_free(&ctx);
@@ -1041,10 +1056,12 @@ static void execute(struct tui *t)
 	done = error == NULL && warning == NULL ? done_text(t) : NULL;
 	report_free(&r);
 	trash = t->screen == SCREEN_TRASH;
+	busy(t, "tui.busy.scan");
 	cancel(t);
 	tui_scan(t);
 	if (trash)
 		load_trash(t);
+	busy(t, NULL);
 	clear_messages(t);
 	t->error = error;
 	t->warning = warning;
@@ -1781,6 +1798,15 @@ static void flush(struct screen *s)
 	free(out);
 }
 
+/* t->paint in the real loop: the frame goes to the terminal at once. */
+static void paint_now(struct tui *t, void *arg)
+{
+	struct screen *s = arg;
+
+	tui_render(t, s);
+	flush(s);
+}
+
 static long now_ms(void)
 {
 	struct timespec ts;
@@ -1852,6 +1878,8 @@ int tui_run(void)
 	colorterm = getenv("COLORTERM");
 	s.truecolor = colorterm != NULL && (strcmp(colorterm, "truecolor") == 0 ||
 	    strcmp(colorterm, "24bit") == 0);
+	t.paint = paint_now;
+	t.paint_arg = &s;
 	/*
 	 * The first frame waits a moment for the terminal to tell its
 	 * background (term_open asked), so the colours do not jump. A

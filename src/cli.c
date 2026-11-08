@@ -44,7 +44,7 @@
 #include "tui.h"
 #include "util.h"
 
-#define CSM_VERSION "0.1.2"
+#define CSM_VERSION "0.2.0"
 
 enum {
 	OPT_LIST,
@@ -332,6 +332,25 @@ static int check_claude(const struct move_ctx *ctx)
 	return EXIT_CLAUDE_RUNNING;
 }
 
+/*
+ * Before a move or a fix: one line on stderr, as large session
+ * directories take seconds and a silent terminal looks hung. Only for
+ * a person: a script reading stderr gets nothing new.
+ */
+static void say_busy(const struct move_ctx *ctx, const char *key,
+    const char *from, const char *to)
+{
+	char *a, *b;
+
+	if (!isatty(STDERR_FILENO))
+		return;
+	a = path_tilde(from, ctx->home);
+	b = path_tilde(to, ctx->home);
+	msg_error(ctx->apply ? key : "busy.plan", a, b);
+	free(a);
+	free(b);
+}
+
 static void report(struct move_ctx *ctx)
 {
 	print_notes(ctx, 0);
@@ -362,6 +381,7 @@ static int run_move(const struct command *cmd, struct cli_parsed *p)
 	if (ctx.apply && (status = check_claude(&ctx)) != 0)
 		goto done;
 	for (i = 0; i < last; i++) {
+		say_busy(&ctx, "busy.move", p->operands[i], p->operands[last]);
 		move_repo(&ctx, p->operands[i], p->operands[last]);
 		report(&ctx);
 	}
@@ -382,6 +402,7 @@ static int run_fix(const struct command *cmd, struct cli_parsed *p)
 	move_init(&ctx, !(p->flags & FLAG(OPT_DRY_RUN)));
 	if (ctx.apply && (status = check_claude(&ctx)) != 0)
 		goto done;
+	say_busy(&ctx, "busy.fix", p->operands[0], p->operands[1]);
 	move_fix(&ctx, p->operands[0], p->operands[1]);
 	report(&ctx);
 	if (!ctx.apply)
