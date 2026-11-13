@@ -132,6 +132,10 @@ my @CHECKS = (
 	['read.last-field', '3.2', sub {
 		my @m = find_all(pat('function @(@,@,@){let @=@===void 0?void 0:`"type":"${@}"`,@=`"${@}":`,@=@.length;while(@>0){let @=@.lastIndexOf(`'
 		    . "\n" . '`,@-1)'));
+		# Since 2.1.325 the scanner takes a fourth argument for lines it
+		# cannot parse; lines that parse are read the same way.
+		push @m, find_all(pat('function @(@,@,@,@){let @=@===void 0?void 0:@===void 0?[`"type":"${@}"`]:[`"type":"${@}"`,`"type": "${@}"`],@=`"${@}":`,@=@.length;while(@>0){let @=@.lastIndexOf(`'
+		    . "\n" . '`,@-1)'));
 		return (@m > 0, scalar(@m) . ' match(es): scans tail lines backwards');
 	}],
 	['read.first-field', '3.2', sub {
@@ -160,6 +164,8 @@ my @CHECKS = (
 	}],
 	['title.read', '4.7', sub {
 		my @m = find_all(pat('=@(@,"customTitle"),@=@??@(@,"customTitle"),@=@(@,"aiTitle")??@(@,"aiTitle")'));
+		# Since 2.1.325 titles are read by record type, not by field name.
+		push @m, find_all(pat('=@(@,"custom-title"),@=@??@(@,"custom-title"),@=@(@,"ai-title")??@(@,"ai-title")'));
 		return (@m > 0, scalar(@m) . ' match(es): customTitle before aiTitle');
 	}],
 	['prompt.skip', '3.2', sub {
