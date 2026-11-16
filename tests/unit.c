@@ -50,6 +50,7 @@
 #include "../src/session.h"
 #include "../src/settings.h"
 #include "../src/term.h"
+#include "../src/transcript.h"
 #include "../src/trash.h"
 #include "../src/tui.h"
 #include "../src/uistate.h"
@@ -1798,6 +1799,163 @@ static void test_trash_flow(void)
 	move_free(&ctx);
 }
 
+/* The core of -r on one session, and -u putting it back. */
+static void test_trash_session(void)
+{
+	struct session_dir_info info;
+	struct trash_entry *entries;
+	struct session_ref *refs;
+	struct inventory inv;
+	struct move_ctx ctx;
+	struct stat st;
+	char *projects, *dir, *trash, *file, *data, *sub, *name;
+	size_t count, len, n;
+	static const char config[] = "{\"projects\":{\"/gone/one\":{}}}";
+	static const char line[] =
+	    "{\"type\":\"user\",\"cwd\":\"/gone/one\"}\n";
+
+	CHECK(session_id_like("0a1b2c3d"));
+	CHECK(session_id_like("0a1b2c3d-4e5f-6789-abcd-ef0123456789"));
+	CHECK(!session_id_like("0a1b2c3"));
+	CHECK(!session_id_like("-0a1b2c3d"));
+	CHECK(!session_id_like("0A1B2C3D"));
+	CHECK(!session_id_like("0a1b2c3d/x"));
+	CHECK(!session_id_like("0a1b2c3g"));
+	CHECK_OWNED(session_id_short("0a1b2c3d-4e5f"), "0a1b2c3d");
+	CHECK_OWNED(session_id_short("abc"), "abc");
+
+	move_init(&ctx, 1);
+	projects = make_dir(ctx.config_dir, "projects");
+	dir = make_dir(projects, "-gone-one");
+	write_file(dir, "aaaaaaaa-1111.jsonl", line);
+	write_file(dir, "aaaaaaaa-1111.desktop-released.json", "{}");
+	write_file(dir, "aaaaaaaa-2222.jsonl", line);
+	write_file(dir, "aaaaaaaa-11110.jsonl", line);
+	sub = make_dir(dir, "aaaaaaaa-1111");
+	free(make_dir(sub, "subagents"));
+	free(sub);
+	sub = xjoin(dir, "aaaaaaaa-1111/subagents");
+	write_file(sub, "agent-x.jsonl", line);
+	free(sub);
+	write_file(ctx.config_dir, ".claude.json", config);
+
+	CHECK(inventory_scan(projects, &inv) == 0);
+	n = inventory_find_session(&inv, "aaaaaaaa", &refs);
+	CHECK(n == 3);
+	session_refs_free(refs, n);
+	n = inventory_find_session(&inv, "aaaaaaaa-2", &refs);
+	CHECK(n == 1);
+	if (n == 1)
+		CHECK_STR(refs[0].id, "aaaaaaaa-2222");
+	session_refs_free(refs, n);
+	CHECK(inventory_find_session(&inv, "bbbbbbbb", &refs) == 0);
+	session_refs_free(refs, 0);
+	inventory_free(&inv);
+
+	inventory_read_dir(dir, &info);
+	CHECK(info.state == STATE_ORPHAN);
+
+	/* -n plans only. */
+	ctx.apply = 0;
+	trash_remove_session(&ctx, &info, "aaaaaaaa-1111");
+	CHECK(!ctx.failed);
+	file = xjoin(dir, "aaaaaaaa-1111.jsonl");
+	CHECK(stat(file, &st) == 0);
+	free(file);
+	trash_remove_session(&ctx, &info, "cccccccc");
+	CHECK(has_note(&ctx, "error.session.gone"));
+	move_clear(&ctx);
+	ctx.failed = 0;
+
+	/*
+	 * Its file, its directory and its other files go; a session whose id
+	 * only starts the same stays, so does .claude.json of an orphan.
+	 */
+	ctx.apply = 1;
+	trash_remove_session(&ctx, &info, "aaaaaaaa-1111");
+	CHECK(!ctx.failed);
+	CHECK(has_note(&ctx, "remove.trash"));
+	move_clear(&ctx);
+	file = xjoin(dir, "aaaaaaaa-1111.jsonl");
+	CHECK(lstat(file, &st) != 0 && errno == ENOENT);
+	free(file);
+	file = xjoin(dir, "aaaaaaaa-1111");
+	CHECK(lstat(file, &st) != 0 && errno == ENOENT);
+	free(file);
+	file = xjoin(dir, "aaaaaaaa-1111.desktop-released.json");
+	CHECK(lstat(file, &st) != 0 && errno == ENOENT);
+	free(file);
+	file = xjoin(dir, "aaaaaaaa-11110.jsonl");
+	CHECK(stat(file, &st) == 0);
+	free(file);
+	file = xjoin(ctx.config_dir, ".claude.json");
+	CHECK(file_read(file, &data, &len) == 0);
+	CHECK_STR(data, config);
+	free(data);
+	free(file);
+
+	trash = trash_path(&ctx);
+	CHECK(trash_list(trash, &entries, &count) == 0 && count == 1);
+	name = count == 1 ? xstrdup(entries[0].name) : xstrdup("");
+	if (count == 1) {
+		CHECK(strstr(entries[0].name, "Z-aaaaaaaa-1111") != NULL);
+		CHECK_STR(entries[0].dir, "-gone-one");
+		CHECK_STR(entries[0].session, "aaaaaaaa-1111");
+		CHECK_STR(entries[0].origin, dir);
+		CHECK(entries[0].projects_key == NULL);
+		file = xjoin(entries[0].path,
+		    "-gone-one/aaaaaaaa-1111/subagents/agent-x.jsonl");
+		CHECK(stat(file, &st) == 0);
+		free(file);
+	}
+	trash_list_free(entries, count);
+
+	/* Back by merging into the directory, as any entry. */
+	trash_restore(&ctx, name);
+	CHECK(!ctx.failed);
+	CHECK(has_note(&ctx, "restore.merge"));
+	move_clear(&ctx);
+	file = xjoin(dir, "aaaaaaaa-1111/subagents/agent-x.jsonl");
+	CHECK(stat(file, &st) == 0);
+	free(file);
+	file = xjoin(dir, "aaaaaaaa-1111.desktop-released.json");
+	CHECK(stat(file, &st) == 0);
+	free(file);
+	CHECK(trash_list(trash, &entries, &count) == 0 && count == 0);
+	trash_list_free(entries, count);
+	free(name);
+
+	/* The last sessions take the emptied directory along; it comes back. */
+	trash_remove_session(&ctx, &info, "aaaaaaaa-1111");
+	trash_remove_session(&ctx, &info, "aaaaaaaa-2222");
+	trash_remove_session(&ctx, &info, "aaaaaaaa-11110");
+	CHECK(!ctx.failed);
+	move_clear(&ctx);
+	CHECK(lstat(dir, &st) != 0 && errno == ENOENT);
+	CHECK(trash_list(trash, &entries, &count) == 0 && count == 3);
+	if (count == 3) {
+		trash_restore(&ctx, entries[0].name);
+		CHECK(has_note(&ctx, "restore.dir"));
+		move_clear(&ctx);
+		trash_restore(&ctx, entries[1].name);
+		trash_restore(&ctx, entries[2].name);
+		CHECK(!ctx.failed);
+		move_clear(&ctx);
+	}
+	trash_list_free(entries, count);
+	file = xjoin(dir, "aaaaaaaa-2222.jsonl");
+	CHECK(stat(file, &st) == 0);
+	free(file);
+
+	free(info.name);
+	free(info.path);
+	free(info.project);
+	free(trash);
+	free(dir);
+	free(projects);
+	move_free(&ctx);
+}
+
 static void field_press(struct field *f, enum key_code code, const char *text)
 {
 	struct key k;
@@ -2703,6 +2861,395 @@ static void pick(struct tui *t, struct screen *s, const char *project)
 	CHECK(t->cursor == i);
 }
 
+/* A conversation with each kind of line the session view knows. */
+static const char conversation[] =
+    "{\"type\":\"permission-mode\",\"permissionMode\":\"default\"}\n"
+    "{\"type\":\"user\",\"timestamp\":\"2026-11-16T10:00:00Z\","
+    "\"message\":{\"role\":\"user\",\"content\":\"Fix the parser,\\n"
+    "it drops\\tcharacters.\"}}\n"
+    "{\"type\":\"user\",\"isMeta\":true,\"message\":{\"content\":\"meta\"}}\n"
+    "{\"type\":\"assistant\",\"timestamp\":\"2026-11-16T10:00:05Z\","
+    "\"message\":{\"id\":\"m1\",\"content\":[{\"type\":\"thinking\","
+    "\"thinking\":\"hidden\"}]}}\n"
+    "{\"type\":\"assistant\",\"message\":{\"id\":\"m1\",\"content\":"
+    "[{\"type\":\"text\",\"text\":\"\\nI will run the tests first.\\n\"}]}}\n"
+    "{\"type\":\"assistant\",\"message\":{\"id\":\"m1\",\"content\":"
+    "[{\"type\":\"tool_use\",\"name\":\"Bash\",\"input\":{\"description\":"
+    "\"Run\",\"command\":\"make test\\n&& echo ok\"}}]}}\n"
+    "{\"type\":\"user\",\"message\":{\"content\":[{\"type\":\"tool_result\","
+    "\"content\":\"one\\ntwo\\nthree\\n\"}]}}\n"
+    "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":"
+    "\"tool_use\",\"name\":\"mcp__x__y\",\"input\":{\"zeta\":\"first\","
+    "\"alpha\":\"second\",\"n\":3}}]}}\n"
+    "{\"type\":\"user\",\"message\":{\"content\":[{\"type\":\"tool_result\","
+    "\"is_error\":true,\"content\":[{\"type\":\"text\",\"text\":\"a\\nb\"},"
+    "{\"type\":\"text\",\"text\":\"c\"}]}]}}\n"
+    "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":"
+    "\"tool_use\",\"name\":\"TaskList\",\"input\":{}}]}}\n"
+    "{\"type\":\"user\",\"message\":{\"content\":\"<command-name>/rename"
+    "</command-name>\\n<command-args>parser fix</command-args>\"}}\n"
+    "{\"type\":\"user\",\"message\":{\"content\":\"<local-command-stdout>"
+    "Renamed</local-command-stdout>\"}}\n"
+    "{\"type\":\"user\",\"message\":{\"content\":\"broken\n"
+    "{\"type\":\"user\",\"isCompactSummary\":true,\"message\":{\"content\":"
+    "\"This session is being continued\"}}\n"
+    "{\"type\":\"user\",\"message\":{\"content\":[{\"type\":\"text\","
+    "\"text\":\"And this?\"},{\"type\":\"image\",\"source\":{}},"
+    "{\"type\":\"document\",\"source\":{}}]}}\n"
+    "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\","
+    "\"text\":\"Done.\"}]}}\n";
+
+/* The session view: what a conversation keeps, and its lines. */
+static void test_transcript(void)
+{
+	struct transcript tr;
+	struct view_line *v;
+	char *dir, *file, *saved;
+	size_t n, i;
+	static const char *const want[] = {
+		"You \302\267 ", "  Fix the parser,", "  it drops characters.",
+		"", "Claude \302\267 ", "  I will run the tests first.",
+		"  \342\206\222 Bash: make test",
+		"  \342\206\220 result, lines: 3",
+		"  \342\206\222 mcp__x__y: first",
+		"  \342\206\220 error, lines: 3",
+		"  \342\206\222 TaskList", "", "You \302\267 ",
+		"  /rename parser fix", "",
+		"\342\200\224 the conversation was compacted here \342\200\224",
+		"", "You \302\267 ", "  And this?", "  [image]", "  [document]",
+		"", "Claude \302\267 ", "  Done."
+	};
+	static const enum view_style styles[] = {
+		VIEW_HEAD_USER, VIEW_TEXT, VIEW_TEXT, VIEW_BLANK,
+		VIEW_HEAD_CLAUDE, VIEW_TEXT, VIEW_TOOL, VIEW_TOOL, VIEW_TOOL,
+		VIEW_TOOL, VIEW_TOOL, VIEW_BLANK, VIEW_HEAD_USER, VIEW_TEXT,
+		VIEW_BLANK, VIEW_NOTE, VIEW_BLANK, VIEW_HEAD_USER, VIEW_TEXT,
+		VIEW_TEXT, VIEW_TEXT, VIEW_BLANK, VIEW_HEAD_CLAUDE, VIEW_TEXT
+	};
+
+	/* The tests after this one rely on the language they were given. */
+	saved = getenv("LC_ALL") != NULL ? xstrdup(getenv("LC_ALL")) : NULL;
+	setenv("LC_ALL", "en_US.UTF-8", 1);
+	msg_init();
+	if (setlocale(LC_CTYPE, "en_US.UTF-8") == NULL) {
+		printf("unit: no en_US.UTF-8 locale, view checks skipped\n");
+		goto done;
+	}
+	CHECK_OWNED(session_text("  a\nb  "), "a\nb");
+	CHECK_OWNED(session_text("<command-name>/clear</command-name>"),
+	    "/clear");
+	CHECK_OWNED(session_text("<bash-input>ls</bash-input>"), "! ls");
+	CHECK(session_text("<system-reminder>x</system-reminder>") == NULL);
+
+	dir = make_dir(work, "view");
+	write_file(dir, "s.jsonl", conversation);
+	file = xjoin(dir, "s.jsonl");
+	CHECK(transcript_read(file, &tr) == 0);
+	/* The thinking, the meta line and the line Claude Code adds go. */
+	CHECK(tr.count == 13);
+	if (tr.count == 13) {
+		CHECK(tr.entries[0].kind == TRANSCRIPT_USER);
+		CHECK(tr.entries[0].when != 0);
+		CHECK_STR(tr.entries[1].text, "I will run the tests first.");
+		CHECK(tr.entries[1].when == 0);
+		CHECK_STR(tr.entries[2].text, "Bash");
+		CHECK_STR(tr.entries[2].arg, "make test\n&& echo ok");
+		CHECK(tr.entries[3].lines == 3 && !tr.entries[3].error);
+		CHECK_STR(tr.entries[4].arg, "first");
+		CHECK(tr.entries[5].lines == 3 && tr.entries[5].error);
+		CHECK(tr.entries[6].arg == NULL);
+		CHECK(tr.entries[8].kind == TRANSCRIPT_COMPACT);
+		CHECK(tr.entries[10].kind == TRANSCRIPT_IMAGE);
+		CHECK(tr.entries[11].kind == TRANSCRIPT_DOCUMENT);
+	}
+
+	/* Into a pipe: nothing wrapped, nothing cut. */
+	v = transcript_lines(&tr, 0, &n);
+	CHECK(n == sizeof want / sizeof want[0]);
+	for (i = 0; i < n && i < sizeof want / sizeof want[0]; i++) {
+		CHECK(strncmp(v[i].text, want[i], strlen(want[i])) == 0);
+		if (want[i][0] == ' ' || want[i][0] == '\0')
+			CHECK_STR(v[i].text, want[i]);
+		CHECK(v[i].style == styles[i]);
+	}
+	transcript_lines_free(v, n);
+
+	/* On a screen: wrapped on words with the indent kept, tools cut. */
+	v = transcript_lines(&tr, 14, &n);
+	CHECK(n > sizeof want / sizeof want[0]);
+	for (i = 0; i < n; i++) {
+		CHECK(text_width(v[i].text) <= 14);
+		if (strcmp(v[i].text, "  I will run") == 0 && i + 1 < n)
+			CHECK_STR(v[i + 1].text, "  the tests");
+	}
+	transcript_lines_free(v, n);
+	transcript_free(&tr);
+
+	/* A session without messages says so; a missing file is an error. */
+	write_file(dir, "e.jsonl", "{\"type\":\"mode\"}\n");
+	free(file);
+	file = xjoin(dir, "e.jsonl");
+	CHECK(transcript_read(file, &tr) == 0 && tr.count == 0);
+	v = transcript_lines(&tr, 0, &n);
+	CHECK(n == 1 && v[0].style == VIEW_NOTE);
+	CHECK(n == 1 && strstr(v[0].text, "no messages") != NULL);
+	transcript_lines_free(v, n);
+	transcript_free(&tr);
+	free(file);
+	file = xjoin(dir, "none.jsonl");
+	CHECK(transcript_read(file, &tr) != 0 && errno == ENOENT);
+	free(file);
+	free(dir);
+	setlocale(LC_CTYPE, "C");
+done:
+	if (saved != NULL)
+		setenv("LC_ALL", saved, 1);
+	else
+		unsetenv("LC_ALL");
+	free(saved);
+	msg_init();
+}
+
+/*
+ * The session view in the TUI: Enter or a double click on a session
+ * opens it at its end, the keys scroll, help comes and goes back, Esc
+ * returns to the table.
+ */
+static void test_tui_view(void)
+{
+	struct tui t;
+	struct screen s;
+	char *base, *config, *projects, *repo, *saved, *name, *dir, *text;
+	size_t i, top;
+
+	saved = xstrdup(getenv("CLAUDE_CONFIG_DIR"));
+	base = make_dir(work, "tui4");
+	config = make_dir(base, "config");
+	projects = make_dir(config, "projects");
+	repo = make_dir(base, "repo");
+	setenv("CLAUDE_CONFIG_DIR", config, 1);
+	setenv("LC_ALL", "en_US.UTF-8", 1);
+	msg_init();
+	if (setlocale(LC_CTYPE, "en_US.UTF-8") == NULL) {
+		printf("unit: no en_US.UTF-8 locale, TUI checks skipped\n");
+		goto done;
+	}
+	name = path_encode(repo);
+	dir = make_dir(projects, name);
+	free(name);
+	text = xmalloc(sizeof conversation + 40 * 64);
+	strcpy(text, conversation);
+	/* Long enough to scroll on a 24-row screen. */
+	for (i = 0; i < 40; i++)
+		strcat(text, "{\"type\":\"user\",\"message\":{\"content\":"
+		    "\"more\"}}\n");
+	write_file(dir, "0a1b2c3d-1111.jsonl", text);
+	free(text);
+	free(dir);
+
+	tui_init(&t);
+	t.claude_now = claude_off;
+	tui_set_claude(&t, 0, 0);
+	screen_init(&s, 80, 24, 1);
+	tui_render(&t, &s);
+	tui_load(&t, (size_t)tui_wanted(&t));
+	press_key(&t, KEY_ENTER);
+	CHECK(t.focus == FOCUS_DETAILS);
+	press_key(&t, KEY_ENTER);
+	CHECK(t.screen == SCREEN_VIEW);
+	tui_render(&t, &s);
+	CHECK(line_has(&s, 0, "session: 0a1b2c3d"));
+	CHECK(line_has(&s, 23, "Esc goes back"));
+	CHECK(line_has(&s, 22, "Home Start"));
+	/* At the end: the last line of the conversation on the last row. */
+	CHECK(t.conv_count > t.conv_rows);
+	CHECK(t.conv_top + t.conv_rows == t.conv_count);
+	CHECK(line_has(&s, t.list_y + t.conv_rows - 1, "more"));
+	top = t.conv_top;
+	press_key(&t, KEY_UP);
+	CHECK(t.conv_top == top - 1);
+	press_key(&t, KEY_HOME);
+	tui_render(&t, &s);
+	CHECK(t.conv_top == 0);
+	CHECK(line_has(&s, t.list_y, "You \302\267 "));
+	CHECK(s.back[t.list_y * s.cols].attr.bg == tui_theme(&t)->bar);
+	CHECK(s.back[t.list_y * s.cols + 1].attr.style & STYLE_BOLD);
+	CHECK(line_has(&s, t.list_y + 1, "  Fix the parser,"));
+	mouse_at(&t, MOUSE_WHEEL_DOWN, 5, t.list_y + 2, 0, 1000);
+	CHECK(t.conv_top == 3);
+	press_key(&t, KEY_END);
+	tui_render(&t, &s);
+	CHECK(t.conv_top + t.conv_rows == t.conv_count);
+	/* A narrower screen wraps again and stays at the end. */
+	screen_free(&s);
+	screen_init(&s, 40, 24, 1);
+	tui_render(&t, &s);
+	CHECK(t.conv_width == 38);
+	CHECK(t.conv_top + t.conv_rows == t.conv_count);
+	/* Help comes over the view and goes back to it. */
+	press_char(&t, "?");
+	CHECK(t.screen == SCREEN_HELP);
+	press_key(&t, KEY_ESC);
+	CHECK(t.screen == SCREEN_VIEW);
+	press_key(&t, KEY_ESC);
+	CHECK(t.screen == SCREEN_LIST && t.focus == FOCUS_DETAILS);
+	CHECK(t.conv_lines == NULL);
+	/* A double click on the session opens it too. */
+	screen_free(&s);
+	screen_init(&s, 80, 24, 1);
+	tui_render(&t, &s);
+	click_at(&t, 10, t.table_y, 0, 2000);
+	click_at(&t, 10, t.table_y, 0, 2100);
+	CHECK(t.screen == SCREEN_VIEW);
+	press_char(&t, "q");
+	CHECK(t.quit);
+
+	screen_free(&s);
+	tui_free(&t);
+	setlocale(LC_CTYPE, "C");
+done:
+	setenv("CLAUDE_CONFIG_DIR", saved, 1);
+	free(saved);
+	free(repo);
+	free(projects);
+	free(config);
+	free(base);
+}
+
+/* A session of project with the id given, in its session directory. */
+static void add_session(const char *projects, const char *project,
+    const char *id)
+{
+	char *name, *dir, *file, *line;
+	size_t cap = strlen(project) + 64;
+
+	name = path_encode(project);
+	dir = make_dir(projects, name);
+	file = xmalloc(strlen(id) + 8);
+	sprintf(file, "%s.jsonl", id);
+	line = xmalloc(cap);
+	snprintf(line, cap, "{\"type\":\"user\",\"cwd\":\"%s\"}\n", project);
+	write_file(dir, file, line);
+	free(line);
+	free(file);
+	free(dir);
+	free(name);
+}
+
+/*
+ * Remove with the session table in focus: the session under the cursor
+ * or the marked ones go, the directory stays while sessions are left.
+ */
+static void test_tui_sessions(void)
+{
+	struct tui t;
+	struct screen s;
+	struct tui_details *d;
+	char *base, *config, *projects, *repo, *saved;
+	char *name, *dir;
+	size_t i;
+
+	saved = xstrdup(getenv("CLAUDE_CONFIG_DIR"));
+	base = make_dir(work, "tui3");
+	config = make_dir(base, "config");
+	projects = make_dir(config, "projects");
+	repo = make_dir(base, "repo");
+	setenv("CLAUDE_CONFIG_DIR", config, 1);
+	setenv("LC_ALL", "en_US.UTF-8", 1);
+	msg_init();
+	if (setlocale(LC_CTYPE, "en_US.UTF-8") == NULL) {
+		printf("unit: no en_US.UTF-8 locale, TUI checks skipped\n");
+		goto done;
+	}
+	add_session(projects, repo, "11111111-aaaa");
+	add_session(projects, repo, "22222222-bbbb");
+	add_session(projects, repo, "33333333-cccc");
+
+	tui_init(&t);
+	t.claude_now = claude_off;
+	tui_set_claude(&t, 0, 0);
+	screen_init(&s, 120, 24, 1);
+	CHECK(t.view_count == 1);
+	tui_render(&t, &s);
+	tui_load(&t, (size_t)tui_wanted(&t));
+	d = &t.details[t.view[0]];
+	CHECK(d->loaded && d->count == 3);
+	tui_render(&t, &s);
+	/* The table starts with the short id, after the column of marks. */
+	CHECK(line_has(&s, t.table_y - 1, "  ID  "));
+	for (i = 0; i < 3 && strcmp(d->ids[i], "22222222-bbbb"); i++)
+		;
+	CHECK(i < 3);
+	CHECK(line_has(&s, t.table_y + i, "  22222222  "));
+
+	/* Remove on the list takes the directory, in the table one session. */
+	press_char(&t, "r");
+	CHECK(t.action == ACTION_REMOVE);
+	press_key(&t, KEY_ESC);
+	press_key(&t, KEY_ENTER);
+	CHECK(t.focus == FOCUS_DETAILS);
+	tui_render(&t, &s);
+	CHECK(line_has(&s, 23, "Space marks"));
+	t.detail_cursor = i;
+	press_char(&t, "r");
+	CHECK(t.mode == MODE_PLAN && t.confirm && !t.yes);
+	CHECK(t.action == ACTION_REMOVE_SESSION && t.target_count == 1);
+	tui_render(&t, &s);
+	CHECK(line_has(&s, t.answers_y - 2, "Move these sessions"));
+	CHECK(line_has(&s, t.lower_y + 1, "session 22222222-bbbb"));
+	press_key(&t, KEY_RIGHT);
+	press_key(&t, KEY_ENTER);
+	CHECK(t.mode == MODE_BROWSE && t.error == NULL);
+	CHECK(t.info != NULL && strstr(t.info, "Sessions in the trash: 1"));
+	CHECK(t.view_count == 1 && t.inv.dirs[t.view[0]].sessions == 2);
+
+	/* Space and Ctrl-click mark; the marked ones go together. */
+	tui_render(&t, &s);
+	tui_load(&t, (size_t)tui_wanted(&t));
+	d = &t.details[t.view[0]];
+	/* The table keeps the focus after the change. */
+	CHECK(t.focus == FOCUS_DETAILS);
+	press_key(&t, KEY_HOME);
+	press_char(&t, " ");
+	CHECK(d->marked[0] && t.detail_cursor == 0);
+	tui_render(&t, &s);
+	CHECK(line_has(&s, t.table_y, "\342\234\223 "));
+	CHECK(line_has(&s, 23, "Marked sessions: 1"));
+	click_at(&t, 10, t.table_y + 1, MOD_CTRL, 1000);
+	CHECK(d->marked[1] && t.detail_cursor == 1);
+	press_char(&t, "r");
+	CHECK(t.target_count == 2);
+	press_key(&t, KEY_RIGHT);
+	CHECK(t.yes);
+	press_key(&t, KEY_ENTER);
+	/* The last sessions take the emptied directory along. */
+	CHECK(t.error == NULL && t.view_count == 0);
+	name = path_encode(repo);
+	dir = xjoin(projects, name);
+	CHECK(!exists(dir));
+	free(dir);
+	free(name);
+
+	/* The trash screen tells the session of an entry. */
+	press_char(&t, "t");
+	CHECK(t.trash.count >= 3);
+	t.trash.cursor = t.trash.count - 1;
+	tui_render(&t, &s);
+	CHECK(line_has(&s, t.lower_y + 3, "Session: "));
+	press_key(&t, KEY_ESC);
+
+	screen_free(&s);
+	tui_free(&t);
+	setlocale(LC_CTYPE, "C");
+done:
+	setenv("CLAUDE_CONFIG_DIR", saved, 1);
+	free(saved);
+	free(repo);
+	free(projects);
+	free(config);
+	free(base);
+}
+
 /*
  * The mouse and the changes of stage 7: clicks, marks, the border, the
  * path field with completion, plans, questions, the trash screen and the
@@ -2997,6 +3544,12 @@ static void test_tui_actions(void)
 	press_key(&t, KEY_ESC);
 	CHECK(t.screen == SCREEN_LIST);
 	pick(&t, &s, other);
+	/*
+	 * The pick repeats an earlier click on the same row, a double click
+	 * that opens the details; Remove on the list takes the directory.
+	 */
+	press_key(&t, KEY_ESC);
+	CHECK(t.focus == FOCUS_LIST);
 	press_char(&t, "r");
 	press_key(&t, KEY_TAB);
 	press_key(&t, KEY_ENTER);
@@ -3550,6 +4103,7 @@ int main(int argc, char **argv)
 	test_format();
 	test_state();
 	test_session_info();
+	test_transcript();
 	test_version();
 	test_inventory();
 	test_cli();
@@ -3557,6 +4111,7 @@ int main(int argc, char **argv)
 	test_trash_config();
 	test_trash_files();
 	test_trash_flow();
+	test_trash_session();
 	test_field();
 	test_github();
 	test_report();
@@ -3565,6 +4120,8 @@ int main(int argc, char **argv)
 	test_tui_columns();
 	test_tui();
 	test_tui_actions();
+	test_tui_sessions();
+	test_tui_view();
 	test_settings();
 	test_wrap();
 	test_ui_state();

@@ -16,11 +16,13 @@ Usage:
   csm -s PATH                      details and sessions of a project
   csm -m [-n] SOURCE... TARGET     move a repository with its sessions
   csm -F [-n] OLD NEW              repair after a manual move
-  csm -r [-ny] PATH...             move session directories to the trash
+  csm -r [-ny] PATH|ID...          move session directories or sessions
+                                   to the trash
   csm -u [-n] [ENTRY]              list the trash or restore an entry
   csm -E [-ny] [ENTRY...]          empty the trash
   csm -P [-ny] [REPO...]           forget GitHub paths that are gone
-  csm [-l|-s|-m|-F|-r|-u|-E|-P] -h help
+  csm -v ID                        view the conversation of a session
+  csm [-l|-s|-m|-F|-r|-u|-E|-P|-v] -h help
   csm -V                           program version
 
 What to do (exactly one):
@@ -28,10 +30,11 @@ What to do (exactly one):
   -s, --show      details and sessions of a project
   -m, --move      move a repository with its sessions
   -F, --fix       repair after a manual move
-  -r, --remove    move session directories to the trash
+  -r, --remove    move session directories or sessions to the trash
   -u, --restore   list the trash or restore an entry
   -E, --empty     empty the trash
   -P, --prune     forget GitHub repository paths that are gone
+  -v, --view      view the conversation of a session
 
 Options:
   -n, --dry-run   show the planned changes, change nothing
@@ -47,10 +50,13 @@ The full-screen interface shows the session directories in a list,
 with the details and sessions of the chosen one below it. The buttons
 at the bottom show their keys, the same letters as the options
 (m f r l), t the trash, / filter, q quit; Space marks directories,
-Enter and Tab move to the details, o and O change the sorting,
-U forgets GitHub paths that are gone, ? shows this help. The mouse clicks, scrolls and drags
-the border between the panels. The sorting, the filter, the chosen
-directory and the border stay as they were for the next run.
+Enter and Tab move to the details, where Enter opens the conversation
+of the chosen session, Space marks sessions and r moves the chosen or
+marked sessions to the trash; o and O change the sorting, U forgets
+GitHub paths that are gone, ? shows this help. The mouse clicks,
+scrolls and drags the border between the panels. The sorting, the
+filter, the chosen directory and the border stay as they were for the
+next run.
 
 The "," key opens the settings. The theme is light or dark by the
 terminal's background (automatic), the terminal's own colours (system),
@@ -95,9 +101,10 @@ csm -s PATH — shows a project's details and its sessions, newest first.
 PATH is a project path or the name of a session directory; a name starts
 with "-", so it comes after "--": csm -s -- -Users-me-repo.
 
-For each session: when it started and last changed, the number of
-messages, the git branch, the session name (given with /rename) and the
-first prompt, cut to the width of the terminal.
+For each session: the start of its id (ID, what -r takes), when it
+started and last changed, the number of messages, the git branch, the
+session name (given with /rename) and the first prompt, cut to the width
+of the terminal.
 
 For an orphaned project it also lists where the project may be now:
 other paths of its GitHub repository and directories of the same name
@@ -126,14 +133,22 @@ change as with -m.
 
   -n, --dry-run   show the planned changes, change nothing
 @ remove
-csm -r [-ny] PATH... — moves session directories to the trash, where they
-can be restored from. The repository itself is never removed.
+csm -r [-ny] PATH|ID... — moves session directories, or single sessions,
+to the trash, where they can be restored from. The repository itself is
+never removed.
 
 PATH is a project path or the name of a session directory, as with -s;
 sessions of the project's subdirectories are named on their own. The
 session directory of an existing project can be removed too. When the
 project is gone, its entry in .claude.json goes to the trash along with
 the session directory.
+
+ID is the start of a session id, at least 8 characters, as -s shows it;
+it must start the id of one session only. The session file goes, with
+the directory of its subagents and whatever else bears its id; the rest
+of the session directory and .claude.json stay. A session directory left
+empty goes too. To name a relative path that looks like an id, write
+./ before it.
 
 Before removing, the program shows the plan and asks; Return means "no".
 Without a terminal to ask on, --yes is needed. While Claude Code is
@@ -184,3 +199,19 @@ is running, nothing changes.
 
   -n, --dry-run   show what would go, change nothing
   -y, --yes       remove without asking
+@ view
+csm -v ID — shows the conversation of one session: your prompts and
+Claude's replies, each side under a header with the time it starts.
+
+ID is the start of a session id, at least 8 characters, as -s shows it;
+it must start the id of one session only.
+
+A tool call takes one line: the tool and what it was given (a command,
+a file); its result shows only its number of lines. Claude's thinking
+and the lines Claude Code keeps for itself are left out; where the
+conversation was compacted, a line says so.
+
+On a terminal the text is wrapped to its width, the headers in bold;
+into a pipe it goes plain, one line of text per line: csm -v ID | less.
+In the full-screen interface Enter on a session of the table (or a double
+click) shows the same.

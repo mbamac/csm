@@ -40,11 +40,12 @@
 #include "platform.h"
 #include "report.h"
 #include "session.h"
+#include "transcript.h"
 #include "trash.h"
 #include "tui.h"
 #include "util.h"
 
-#define CSM_VERSION "0.2.3"
+#define CSM_VERSION "0.4.0"
 
 enum {
 	OPT_LIST,
@@ -55,6 +56,7 @@ enum {
 	OPT_RESTORE,
 	OPT_EMPTY,
 	OPT_PRUNE,
+	OPT_VIEW,
 	OPT_DRY_RUN,
 	OPT_YES,
 	OPT_ORPHANS,
@@ -67,7 +69,7 @@ enum {
 #define FLAG(id) (1UL << (id))
 #define ACTIONS (FLAG(OPT_LIST) | FLAG(OPT_SHOW) | FLAG(OPT_MOVE) | \
 	FLAG(OPT_FIX) | FLAG(OPT_REMOVE) | FLAG(OPT_RESTORE) | FLAG(OPT_EMPTY) | \
-	FLAG(OPT_PRUNE))
+	FLAG(OPT_PRUNE) | FLAG(OPT_VIEW))
 
 static const struct cli_option options[] = {
 	{ 'l', "list", 0, OPT_LIST },
@@ -78,6 +80,7 @@ static const struct cli_option options[] = {
 	{ 'u', "restore", 0, OPT_RESTORE },
 	{ 'E', "empty", 0, OPT_EMPTY },
 	{ 'P', "prune", 0, OPT_PRUNE },
+	{ 'v', "view", 0, OPT_VIEW },
 	{ 'n', "dry-run", 0, OPT_DRY_RUN },
 	{ 'y', "yes", 0, OPT_YES },
 	{ 'o', "orphans", 0, OPT_ORPHANS },
@@ -605,9 +608,9 @@ static char *text_or_none(const char *s)
 static int print_sessions(const struct session_dir_info *d,
     const struct claude_paths *paths)
 {
-	struct table t = { 6, 1U << 2, NULL, 0, 0 };
+	struct table t = { 7, 1U << 3, NULL, 0, 0 };
 	struct session_info *infos;
-	char **files, *row[6], *shown;
+	char **files, *row[7], *shown;
 	size_t count, n = 0, i;
 	int failed = 0;
 
@@ -626,20 +629,22 @@ static int print_sessions(const struct session_dir_info *d,
 	session_files_free(files, count);
 	if (n > 0) {
 		qsort(infos, n, sizeof *infos, session_compare);
-		row[0] = xstrdup(msg("show.col.started"));
-		row[1] = xstrdup(msg("show.col.modified"));
-		row[2] = xstrdup(msg("show.col.messages"));
-		row[3] = xstrdup(msg("show.col.branch"));
-		row[4] = xstrdup(msg("show.col.title"));
-		row[5] = xstrdup(msg("show.col.prompt"));
+		row[0] = xstrdup(msg("show.col.id"));
+		row[1] = xstrdup(msg("show.col.started"));
+		row[2] = xstrdup(msg("show.col.modified"));
+		row[3] = xstrdup(msg("show.col.messages"));
+		row[4] = xstrdup(msg("show.col.branch"));
+		row[5] = xstrdup(msg("show.col.title"));
+		row[6] = xstrdup(msg("show.col.prompt"));
 		table_add(&t, row);
 		for (i = 0; i < n; i++) {
-			row[0] = format_time(infos[i].started);
-			row[1] = format_time(infos[i].modified);
-			row[2] = format_count(infos[i].messages);
-			row[3] = text_or_none(infos[i].branch);
-			row[4] = text_or_none(infos[i].title);
-			row[5] = text_or_none(infos[i].prompt);
+			row[0] = session_id_short(infos[i].id);
+			row[1] = format_time(infos[i].started);
+			row[2] = format_time(infos[i].modified);
+			row[3] = format_count(infos[i].messages);
+			row[4] = text_or_none(infos[i].branch);
+			row[5] = text_or_none(infos[i].title);
+			row[6] = text_or_none(infos[i].prompt);
 			table_add(&t, row);
 		}
 		fputc('\n', stdout);
@@ -792,32 +797,76 @@ static int no_terminal(int action)
 	return 1;
 }
 
-static void print_removal(const struct session_dir_info *d,
+/* A directory (id NULL) or one session of it, as the plan of -r shows it. */
+static void print_removal(const struct session_dir_info *d, const char *id,
     const struct move_ctx *ctx)
 {
 	char *name, *project, *state;
 
-	name = text_clean(d->name);
+	name = text_clean(id != NULL ? id : d->name);
 	project = d->project != NULL ? format_project(d, ctx->home) :
 	    xstrdup(msg("value.none"));
 	state = format_state(d->state);
-	msg_print(stdout, "remove.dir", name, project, state);
+	msg_print(stdout, id != NULL ? "remove.session" : "remove.dir", name,
+	    project, state);
 	free(name);
 	free(project);
 	free(state);
 }
 
 /*
- * The session directories go to the trash. Arguments match as with -s.
- * With a question the plan comes first and the removal after a yes.
+ * The session that arg, the start of a session id, means: added to
+ * *refs once. 0 when no session has such an id, 1 when one has, -1
+ * (reported) when more than one has.
+ */
+static int add_session(const struct inventory *inv, const char *arg,
+    struct session_ref **refs, size_t *count)
+{
+	struct session_ref *hits;
+	char *num;
+	size_t n, i;
+
+	n = inventory_find_session(inv, arg, &hits);
+	if (n > 1) {
+		num = format_count(n);
+		msg_error("error.session.ambiguous", arg, num);
+		free(num);
+	}
+	if (n != 1) {
+		session_refs_free(hits, n);
+		return n == 0 ? 0 : -1;
+	}
+	for (i = 0; i < *count; i++)
+		if ((*refs)[i].dir == hits[0].dir &&
+		    strcmp((*refs)[i].id, hits[0].id) == 0)
+			break;
+	if (i < *count) {
+		session_refs_free(hits, 1);
+		return 1;
+	}
+	*refs = xrealloc(*refs, (*count + 1) * sizeof **refs);
+	(*refs)[(*count)++] = hits[0];
+	free(hits);
+	return 1;
+}
+
+/*
+ * Session directories, or single sessions, go to the trash. An argument
+ * that looks like the start of a session id (at least 8 characters, as
+ * -s shows it) and starts the id of one session is that session; any
+ * other matches as with -s. A session in a directory that goes as a whole
+ * goes with it. With a question the plan comes first and the removal
+ * after a yes.
  */
 static int run_remove(const struct command *cmd, struct cli_parsed *p)
 {
 	struct move_ctx ctx;
 	struct inventory inv;
-	size_t *found, n, i, k;
+	struct session_ref *refs = NULL;
+	size_t *found, n, i, k, ref_count = 0, dirs = 0, sessions = 0;
 	char *chosen, *shown;
-	int status = 0, ask, dry, any = 0, pass, quiet;
+	const char *ask_key;
+	int status = 0, ask, dry, pass, quiet, r;
 
 	ask = must_ask(p);
 	if (ask && no_terminal(cmd->id))
@@ -839,16 +888,28 @@ static int run_remove(const struct command *cmd, struct cli_parsed *p)
 	chosen = xmalloc(inv.count + 1);
 	memset(chosen, 0, inv.count + 1);
 	for (i = 0; i < (size_t)p->operand_count; i++) {
+		r = session_id_like(p->operands[i]) ? add_session(&inv,
+		    p->operands[i], &refs, &ref_count) : 0;
+		if (r < 0)
+			status = EXIT_PARTIAL;
+		if (r != 0)
+			continue;
 		n = inventory_match(&inv, p->operands[i], found);
 		if (n == 0) {
 			msg_error("error.show.none", p->operands[i]);
 			status = EXIT_PARTIAL;
 		}
 		for (k = 0; k < n; k++)
-			chosen[found[k]] = any = 1;
+			chosen[found[k]] = 1;
 	}
-	if (!any)
+	for (i = 0; i < inv.count; i++)
+		dirs += chosen[i] != 0;
+	for (i = 0; i < ref_count; i++)
+		sessions += !chosen[refs[i].dir];
+	if (dirs == 0 && sessions == 0)
 		goto done;
+	ask_key = sessions == 0 ? "remove.ask" : dirs == 0 ?
+	    "remove.ask.sessions" : "remove.ask.both";
 	for (pass = ask ? 0 : 1; pass < 2; pass++) {
 		ctx.apply = pass == 1 && !dry;
 		quiet = ask && pass == 1;
@@ -856,12 +917,23 @@ static int run_remove(const struct command *cmd, struct cli_parsed *p)
 			if (!chosen[i])
 				continue;
 			if (!quiet)
-				print_removal(&inv.dirs[i], &ctx);
+				print_removal(&inv.dirs[i], NULL, &ctx);
 			trash_remove(&ctx, &inv.dirs[i]);
 			print_notes(&ctx, quiet);
 			move_clear(&ctx);
 		}
-		if (pass == 0 && !cli_confirm(stdin, stdout, msg("remove.ask"))) {
+		for (i = 0; i < ref_count; i++) {
+			if (chosen[refs[i].dir])
+				continue;
+			if (!quiet)
+				print_removal(&inv.dirs[refs[i].dir],
+				    refs[i].id, &ctx);
+			trash_remove_session(&ctx, &inv.dirs[refs[i].dir],
+			    refs[i].id);
+			print_notes(&ctx, quiet);
+			move_clear(&ctx);
+		}
+		if (pass == 0 && !cli_confirm(stdin, stdout, msg(ask_key))) {
 			msg_print(stdout, "confirm.no");
 			goto done;
 		}
@@ -870,6 +942,7 @@ static int run_remove(const struct command *cmd, struct cli_parsed *p)
 	if (ctx.failed)
 		status = EXIT_PARTIAL;
 done:
+	session_refs_free(refs, ref_count);
 	free(chosen);
 	free(found);
 	inventory_free(&inv);
@@ -1107,6 +1180,88 @@ done:
 	return status;
 }
 
+/* SGR codes for a line of the view on a terminal with colours. */
+static const char *view_sgr(enum view_style style)
+{
+	switch (style) {
+	case VIEW_HEAD_USER:
+	case VIEW_HEAD_CLAUDE:
+		return "\033[1m";
+	case VIEW_TOOL:
+	case VIEW_NOTE:
+		return "\033[2m";
+	default:
+		return NULL;
+	}
+}
+
+/*
+ * The conversation of one session, found by the start of its id as with
+ * -r. On a terminal it is wrapped to its width, the headers bold and the
+ * tool lines dim unless NO_COLOR is set; into a pipe it goes plain and
+ * whole, one line of text per line.
+ */
+static int run_view(const struct command *cmd, struct cli_parsed *p)
+{
+	struct claude_paths paths;
+	struct inventory inv;
+	struct session_ref *hits = NULL;
+	struct transcript tr;
+	struct view_line *lines;
+	const char *arg = p->operands[0], *no_color, *sgr;
+	char *file, *name, *num, *shown;
+	size_t n = 0, count, i, width;
+	int status = 0, color;
+
+	(void)cmd;
+	if (scan(&paths, &inv) != 0)
+		return EXIT_PARTIAL;
+	if (session_id_like(arg))
+		n = inventory_find_session(&inv, arg, &hits);
+	if (n != 1) {
+		if (n == 0) {
+			msg_error("error.view.none", arg);
+		} else {
+			num = format_count(n);
+			msg_error("error.session.ambiguous", arg, num);
+			free(num);
+		}
+		status = EXIT_PARTIAL;
+		goto done;
+	}
+	name = xmalloc(strlen(hits[0].id) + 7);
+	sprintf(name, "%s.jsonl", hits[0].id);
+	file = xjoin(inv.dirs[hits[0].dir].path, name);
+	free(name);
+	if (transcript_read(file, &tr) != 0) {
+		shown = path_tilde(file, paths.home);
+		msg_error("error.read", shown, strerror(errno));
+		free(shown);
+		free(file);
+		status = EXIT_PARTIAL;
+		goto done;
+	}
+	free(file);
+	width = platform_term_width(STDOUT_FILENO);
+	no_color = getenv("NO_COLOR");
+	color = width > 0 && (no_color == NULL || no_color[0] == '\0');
+	lines = transcript_lines(&tr, width, &count);
+	for (i = 0; i < count; i++) {
+		sgr = color ? view_sgr(lines[i].style) : NULL;
+		if (sgr != NULL)
+			printf("%s%s\033[0m\n", sgr, lines[i].text);
+		else
+			printf("%s\n", lines[i].text);
+	}
+	transcript_lines_free(lines, count);
+	transcript_free(&tr);
+done:
+	session_refs_free(hits, n);
+	inventory_free(&inv);
+	claude_paths_free(&paths);
+	return status;
+}
+
 static const struct command commands[] = {
 	{ OPT_LIST, FLAG(OPT_ORPHANS) | FLAG(OPT_JSON), 0, 0, run_list },
 	{ OPT_SHOW, 0, 1, 1, run_show },
@@ -1116,6 +1271,7 @@ static const struct command commands[] = {
 	{ OPT_RESTORE, FLAG(OPT_DRY_RUN), 0, 1, run_restore },
 	{ OPT_EMPTY, FLAG(OPT_DRY_RUN) | FLAG(OPT_YES), 0, -1, run_empty },
 	{ OPT_PRUNE, FLAG(OPT_DRY_RUN) | FLAG(OPT_YES), 0, -1, run_prune },
+	{ OPT_VIEW, 0, 1, 1, run_view },
 	{ -1, 0, 0, 0, NULL }
 };
 
@@ -1137,9 +1293,9 @@ static void report_parse_error(const struct cli_parsed *p)
 }
 
 /*
- * Exactly one action option (-l, -s, -m, -F, -r, -u, -E, -P) chooses what to
- * do; the other options modify it. -V wins over everything, -h over the
- * operand count, so "csm -r -h" works without paths.
+ * Exactly one action option (-l, -s, -m, -F, -r, -u, -E, -P, -v) chooses
+ * what to do; the other options modify it. -V wins over everything, -h
+ * over the operand count, so "csm -r -h" works without paths.
  */
 static int dispatch(struct cli_parsed *p)
 {

@@ -15,11 +15,13 @@ Użycie:
   csm -s ŚCIEŻKA                   szczegóły i lista sesji projektu
   csm -m [-n] ŹRÓDŁO... CEL        przeniesienie repozytorium z sesjami
   csm -F [-n] STARA NOWA           naprawa po ręcznym przeniesieniu
-  csm -r [-ny] ŚCIEŻKA...          usunięcie katalogów sesji do kosza
+  csm -r [-ny] ŚCIEŻKA|ID...       usunięcie katalogów sesji albo sesji
+                                   do kosza
   csm -u [-n] [WPIS]               zawartość kosza albo przywrócenie wpisu
   csm -E [-ny] [WPIS...]           opróżnienie kosza
   csm -P [-ny] [REPO...]           usunięcie nieistniejących ścieżek GitHub
-  csm [-l|-s|-m|-F|-r|-u|-E|-P] -h pomoc
+  csm -v ID                        podgląd rozmowy jednej sesji
+  csm [-l|-s|-m|-F|-r|-u|-E|-P|-v] -h pomoc
   csm -V                           wersja programu
 
 Co zrobić (dokładnie jedna):
@@ -27,10 +29,11 @@ Co zrobić (dokładnie jedna):
   -s, --show      szczegóły i lista sesji projektu
   -m, --move      przeniesienie repozytorium z sesjami
   -F, --fix       naprawa po ręcznym przeniesieniu
-  -r, --remove    usunięcie katalogów sesji do kosza
+  -r, --remove    usunięcie katalogów sesji albo sesji do kosza
   -u, --restore   zawartość kosza albo przywrócenie wpisu
   -E, --empty     opróżnienie kosza
   -P, --prune     usunięcie nieistniejących ścieżek repozytoriów GitHub
+  -v, --view      podgląd rozmowy jednej sesji
 
 Opcje:
   -n, --dry-run   pokaż plan zmian, niczego nie zmieniaj
@@ -45,8 +48,11 @@ Krótkie opcje można łączyć (-mn); „--” kończy opcje.
 Interfejs pełnoekranowy pokazuje katalogi sesji na liście, a pod nią
 szczegóły i sesje wybranego. Przyciski na dole podają swoje klawisze,
 te same litery co opcje (m f r l), t kosz, / filtr, q wyjście; Spacja
-zaznacza katalogi, Enter i Tab przechodzą do szczegółów, o i O zmieniają
-sortowanie, U usuwa nieistniejące ścieżki GitHub, ? pokazuje tę pomoc.
+zaznacza katalogi, Enter i Tab przechodzą do szczegółów, gdzie Enter
+otwiera rozmowę wybranej sesji, Spacja zaznacza sesje, a r przenosi
+wybraną albo zaznaczone sesje do kosza;
+o i O zmieniają sortowanie, U usuwa nieistniejące ścieżki GitHub,
+? pokazuje tę pomoc.
 Myszką można klikać, przewijać i przeciągać granicę między panelami.
 Sortowanie, filtr, wybrany katalog i granica paneli zostają takie same
 przy następnym uruchomieniu.
@@ -94,9 +100,10 @@ csm -s ŚCIEŻKA — pokazuje szczegóły projektu i jego sesje, od najnowszej.
 ŚCIEŻKA to ścieżka projektu albo nazwa katalogu sesji; nazwa zaczyna się
 od „-”, więc stoi po „--”: csm -s -- -Users-ja-repo.
 
-Dla każdej sesji: kiedy się zaczęła i kiedy ostatnio zmieniła, liczba
-wiadomości, gałąź git, nazwa sesji (nadana przez /rename) i pierwszy
-prompt, skrócony do szerokości terminala.
+Dla każdej sesji: początek identyfikatora (ID, ten, który przyjmuje -r),
+kiedy się zaczęła i kiedy ostatnio zmieniła, liczba wiadomości, gałąź
+git, nazwa sesji (nadana przez /rename) i pierwszy prompt, skrócony do
+szerokości terminala.
 
 Przy osieroconym projekcie pokazuje też, gdzie projekt może być teraz:
 inne ścieżki jego repozytorium GitHub i katalogi o tej samej nazwie obok
@@ -124,13 +131,21 @@ zmieniają się tak jak przy -m.
 
   -n, --dry-run   pokaż plan zmian, niczego nie zmieniaj
 @ remove
-csm -r [-ny] ŚCIEŻKA... — przenosi katalogi sesji do kosza, skąd można
-je przywrócić. Samego repozytorium nigdy nie usuwa.
+csm -r [-ny] ŚCIEŻKA|ID... — przenosi do kosza katalogi sesji albo
+pojedyncze sesje; z kosza można je przywrócić. Samego repozytorium nigdy
+nie usuwa.
 
 ŚCIEŻKA to ścieżka projektu albo nazwa katalogu sesji, jak przy -s;
 sesje z podkatalogów projektu trzeba podać osobno. Usunąć można też
 katalog sesji istniejącego projektu. Gdy projektu już nie ma, jego wpis
 w .claude.json trafia do kosza razem z katalogiem sesji.
+
+ID to początek identyfikatora sesji, co najmniej 8 znaków, tak jak
+pokazuje go -s; musi pasować do jednej sesji. Do kosza trafia plik
+sesji razem z katalogiem jej subagentów i wszystkim, co nosi jej
+identyfikator; reszta katalogu sesji i .claude.json zostają. Katalog
+sesji, który zostanie pusty, też trafia do kosza. Ścieżkę względną, która
+wygląda jak identyfikator, trzeba poprzedzić „./”.
 
 Przed usunięciem program pokazuje plan i pyta; Return znaczy „nie”.
 Bez terminala, w którym da się zapytać, potrzebne jest --yes. Gdy działa
@@ -179,3 +194,19 @@ się nie zmienia.
 
   -n, --dry-run   pokaż, co zniknie, niczego nie zmieniaj
   -y, --yes       usuń bez pytania
+@ view
+csm -v ID — pokazuje rozmowę jednej sesji: twoje prompty i odpowiedzi
+Claude, każda strona pod nagłówkiem z czasem, w którym zaczyna mówić.
+
+ID to początek identyfikatora sesji, co najmniej 8 znaków, tak jak
+pokazuje go -s; musi pasować do jednej sesji.
+
+Wywołanie narzędzia zajmuje jedną linię: narzędzie i to, co dostało
+(polecenie, plik); z wyniku widać tylko liczbę linii. Myślenie Claude
+i linie, które Claude Code zapisuje na własny użytek, są pomijane; tam,
+gdzie rozmowę skompaktowano, mówi o tym osobna linia.
+
+Na terminalu tekst jest zawijany do jego szerokości, a nagłówki są
+pogrubione; w potoku idzie czysty tekst, linia po linii: csm -v ID | less.
+W interfejsie pełnoekranowym to samo pokazuje Enter na sesji w tabeli
+(albo podwójny klik).

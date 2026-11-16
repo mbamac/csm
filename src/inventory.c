@@ -277,6 +277,47 @@ size_t inventory_match(const struct inventory *inv, const char *arg,
 	return n;
 }
 
+/*
+ * The sessions whose id starts with prefix, in every directory: *found
+ * gets them (free with session_refs_free), the result is their number.
+ */
+size_t inventory_find_session(const struct inventory *inv, const char *prefix,
+    struct session_ref **found)
+{
+	char **files, *id;
+	const char *base;
+	size_t count, i, k, len, n = 0;
+
+	*found = NULL;
+	len = strlen(prefix);
+	for (i = 0; i < inv->count; i++) {
+		files = session_files(inv->dirs[i].path, &count);
+		for (k = 0; k < count; k++) {
+			base = strrchr(files[k], '/');
+			base = base != NULL ? base + 1 : files[k];
+			if (strncmp(base, prefix, len) != 0)
+				continue;
+			id = xstrdup(base);
+			id[strlen(id) - strlen(".jsonl")] = '\0';
+			*found = xrealloc(*found, (n + 1) * sizeof **found);
+			(*found)[n].dir = i;
+			(*found)[n].id = id;
+			n++;
+		}
+		session_files_free(files, count);
+	}
+	return n;
+}
+
+void session_refs_free(struct session_ref *refs, size_t count)
+{
+	size_t i;
+
+	for (i = 0; i < count; i++)
+		free(refs[i].id);
+	free(refs);
+}
+
 void inventory_free(struct inventory *inv)
 {
 	size_t i;

@@ -48,6 +48,12 @@ struct inventory {
 	size_t count;
 };
 
+/* A session found by its id: the directory it is in and its full id. */
+struct session_ref {
+	size_t dir;		/* index into the inventory */
+	char *id;		/* file name without .jsonl */
+};
+
 enum dir_state path_state(const char *path, const char *const *mount_parents);
 const char *state_name(enum dir_state state);
 void inventory_walk(const char *dir, unsigned long long *size,
@@ -56,6 +62,9 @@ void inventory_read_dir(const char *path, struct session_dir_info *info);
 int inventory_scan(const char *projects_dir, struct inventory *inv);
 size_t inventory_match(const struct inventory *inv, const char *arg,
     size_t *found);
+size_t inventory_find_session(const struct inventory *inv, const char *prefix,
+    struct session_ref **found);
+void session_refs_free(struct session_ref *refs, size_t count);
 void inventory_free(struct inventory *inv);
 
 #endif

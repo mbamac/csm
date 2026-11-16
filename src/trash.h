@@ -33,6 +33,7 @@ struct trash_entry {
 	char *name;		/* the entry's directory in the trash */
 	char *path;
 	char *dir;		/* session directory name; NULL without metadata */
+	char *session;		/* one session id; NULL: all of it */
 	char *origin;		/* where the session directory was */
 	char *project;		/* NULL when unknown */
 	char *config_dir;
@@ -51,6 +52,8 @@ int trash_list(const char *trash, struct trash_entry **entries,
 void trash_entry_free(struct trash_entry *e);
 void trash_list_free(struct trash_entry *entries, size_t count);
 void trash_remove(struct move_ctx *ctx, const struct session_dir_info *d);
+void trash_remove_session(struct move_ctx *ctx,
+    const struct session_dir_info *d, const char *id);
 void trash_restore(struct move_ctx *ctx, const char *name);
 void trash_delete(struct move_ctx *ctx, const struct trash_entry *e);
 

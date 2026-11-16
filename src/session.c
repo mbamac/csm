@@ -560,19 +560,19 @@ static char *prompt_cut(char *s)
 }
 
 /*
- * The prompt a text of a user message shows, or NULL when Claude Code
- * skips it. Newlines become spaces. A slash command shows as "/name args";
- * one without arguments is only a fallback (*fallback, if still NULL),
- * used when no real prompt follows. Claude Code also skips its own
- * built-in commands with arguments; csm does not know their names.
+ * What a text of a user message says, trimmed, or NULL when it is text
+ * Claude Code itself put there. A slash command is "/name args", a shell
+ * command "! command". Without whole, newlines become spaces and a slash
+ * command without arguments is only a fallback (*fallback, if still NULL);
+ * with it, newlines stay and such a command is the text.
  */
-char *session_prompt(const char *text, char **fallback)
+static char *user_text(const char *text, char **fallback, int whole)
 {
 	char *s, *name, *args, *out, *p;
 	size_t n;
 
 	s = xstrdup(text);
-	for (p = s; *p != '\0'; p++)
+	for (p = s; *p != '\0' && !whole; p++)
 		if (*p == '\n')
 			*p = ' ';
 	for (p = s; is_space((unsigned char)*p); p++)
@@ -585,7 +585,9 @@ char *session_prompt(const char *text, char **fallback)
 	out = NULL;
 	if ((name = tag_body(s, "command-name")) != NULL) {
 		args = tag_body(s, "command-args");
-		if (args == NULL || args[0] == '\0') {
+		if ((args == NULL || args[0] == '\0') && whole) {
+			out = xstrdup(name);
+		} else if (args == NULL || args[0] == '\0') {
 			if (*fallback == NULL)
 				*fallback = xstrdup(name);
 		} else {
@@ -609,7 +611,33 @@ char *session_prompt(const char *text, char **fallback)
 		}
 	}
 	free(s);
+	return out;
+}
+
+/*
+ * The prompt a text of a user message shows, or NULL when Claude Code
+ * skips it. Newlines become spaces. A slash command shows as "/name args";
+ * one without arguments is only a fallback (*fallback, if still NULL),
+ * used when no real prompt follows. Claude Code also skips its own
+ * built-in commands with arguments; csm does not know their names.
+ */
+char *session_prompt(const char *text, char **fallback)
+{
+	char *out;
+
+	out = user_text(text, fallback, 0);
 	return out != NULL ? prompt_cut(out) : NULL;
+}
+
+/*
+ * A text of a user message in full, as the session view shows it: lines
+ * kept, nothing cut; NULL for text Claude Code put there itself.
+ */
+char *session_text(const char *text)
+{
+	char *fallback = NULL;
+
+	return user_text(text, &fallback, 1);
 }
 
 /* The first prompt of a user line, following Claude Code's rules. */
@@ -838,4 +866,36 @@ int session_compare(const void *a, const void *b)
 	if (x->modified != y->modified)
 		return x->modified > y->modified ? -1 : 1;
 	return strcmp(x->id, y->id);
+}
+
+/*
+ * Whether arg can be (the start of) a session id: lower-case hex digits
+ * and dashes, a digit or letter first, at least SESSION_ID_SHORT long. A
+ * session directory starts with a dash, so the two never look alike.
+ */
+int session_id_like(const char *arg)
+{
+	const char *p;
+
+	if (strlen(arg) < SESSION_ID_SHORT || arg[0] == '-')
+		return 0;
+	for (p = arg; *p != '\0'; p++)
+		if (!((*p >= '0' && *p <= '9') || (*p >= 'a' && *p <= 'f') ||
+		    *p == '-'))
+			return 0;
+	return 1;
+}
+
+/* The start of a session id, as csm -s shows it; cleaned for the terminal. */
+char *session_id_short(const char *id)
+{
+	char buf[SESSION_ID_SHORT + 1];
+	size_t n;
+
+	n = strlen(id);
+	if (n > SESSION_ID_SHORT)
+		n = SESSION_ID_SHORT;
+	memcpy(buf, id, n);
+	buf[n] = '\0';
+	return text_clean(buf);
 }

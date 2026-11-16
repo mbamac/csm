@@ -33,14 +33,18 @@
 #include "settings.h"
 #include "term.h"
 #include "theme.h"
+#include "transcript.h"
 #include "trash.h"
 #include "uistate.h"
 
 /* Columns of the list. */
 #define TUI_COLUMNS 5
 
-/* Columns of the session table; the last one, the first prompt, flexes. */
-#define TUI_SESSION_COLUMNS 6
+/*
+ * Columns of the session table: the start of the session id first, the
+ * first prompt last, which flexes.
+ */
+#define TUI_SESSION_COLUMNS 7
 
 /* Columns of the trash list: entry, removed, size, project. */
 #define TRASH_COLUMNS 4
@@ -68,7 +72,8 @@ enum tui_screen {
 	SCREEN_LIST,		/* session directories */
 	SCREEN_TRASH,
 	SCREEN_SETTINGS,
-	SCREEN_HELP
+	SCREEN_HELP,
+	SCREEN_VIEW		/* the conversation of one session */
 };
 
 /* The rows of the settings screen. */
@@ -91,7 +96,8 @@ enum tui_action {
 	ACTION_REMOVE,
 	ACTION_PRUNE,		/* githubRepoPaths that no longer exist */
 	ACTION_RESTORE,
-	ACTION_DELETE		/* from the trash, for good */
+	ACTION_DELETE,		/* from the trash, for good */
+	ACTION_REMOVE_SESSION	/* sessions of the selected directory */
 };
 
 /* The texts of one list row, made once per scan. */
@@ -104,6 +110,8 @@ struct tui_details {
 	int loaded;
 	size_t count;
 	char **cells;		/* count rows of TUI_SESSION_COLUMNS */
+	char **ids;		/* the full session ids, in table order */
+	char *marked;		/* per session: chosen with Space or a click */
 	size_t widths[TUI_SESSION_COLUMNS];
 };
 
@@ -140,6 +148,7 @@ struct tui {
 	size_t anchor;		/* where a Shift-click range starts, in view */
 	size_t cursor, top;	/* positions in view */
 	size_t detail_cursor, detail_top;
+	size_t detail_anchor;	/* where a Shift-click range starts */
 	int list_follow, detail_follow;	/* the frame scrolls to the cursor */
 	enum tui_sort sort;
 	int reverse;
@@ -173,6 +182,11 @@ struct tui {
 	char **help_lines;	/* the general help wrapped to help_width */
 	size_t help_count, help_width, help_top, help_rows;
 
+	struct transcript conv;	/* the conversation SCREEN_VIEW shows */
+	char *conv_title;
+	struct view_line *conv_lines;	/* wrapped to conv_width */
+	size_t conv_count, conv_width, conv_top, conv_rows;
+
 	struct settings settings;
 	char *settings_path;	/* NULL when the home directory is unknown */
 	char *state_path;	/* likewise */
@@ -185,6 +199,7 @@ struct tui {
 	/* The change being prepared. */
 	enum tui_action action;
 	char *action_path;	/* the project moved or fixed */
+	size_t action_dir;	/* the directory whose sessions go */
 	size_t *targets;	/* directories or trash entries it is for */
 	size_t target_count;
 	struct field field;

@@ -31,6 +31,9 @@
 /* Longest first prompt Claude Code keeps, in characters, before "…". */
 #define SESSION_PROMPT_MAX 200
 
+/* The characters of a session id csm -s shows: the shortest prefix -r takes. */
+#define SESSION_ID_SHORT 8
+
 /* The Claude Code version csm was last checked against. */
 #define SESSION_TESTED_VERSION "2.1.325"
 
@@ -62,7 +65,10 @@ void session_files_free(char **files, size_t count);
 int session_info_read(const char *file, struct session_info *info);
 void session_info_free(struct session_info *info);
 int session_compare(const void *a, const void *b);
+int session_id_like(const char *arg);
+char *session_id_short(const char *id);
 char *session_prompt(const char *text, char **fallback);
+char *session_text(const char *text);
 char *session_claude_version(const char *projects_dir);
 int session_version_compare(const char *a, const char *b);
 

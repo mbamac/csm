@@ -29,13 +29,13 @@ BINDIR = $(PREFIX)/bin
 LIB_SRC = src/cli.c src/debug.c src/field.c src/fileio.c src/format.c \
 	src/github.c src/inventory.c src/json.c src/move.c src/msg.c \
 	src/path.c src/platform.c src/report.c src/rewrite.c src/screen.c \
-	src/session.c src/settings.c src/term.c src/theme.c src/trash.c \
-	src/tui.c src/tui_draw.c src/uistate.c src/util.c
+	src/session.c src/settings.c src/term.c src/theme.c src/transcript.c \
+	src/trash.c src/tui.c src/tui_draw.c src/uistate.c src/util.c
 LIB_HDR = src/cli.h src/debug.h src/field.h src/fileio.h src/format.h \
 	src/github.h src/inventory.h src/json.h src/move.h src/msg.h \
 	src/path.h src/platform.h src/report.h src/rewrite.h src/screen.h \
-	src/session.h src/settings.h src/term.h src/theme.h src/trash.h \
-	src/tui.h src/uistate.h src/util.h
+	src/session.h src/settings.h src/term.h src/theme.h src/transcript.h \
+	src/trash.h src/tui.h src/uistate.h src/util.h
 TEXTS = lang/en.txt help/en.txt lang/pl.txt help/pl.txt
 
 all: csm

@@ -63,17 +63,19 @@ static const char *const trash_headers[TRASH_COLUMNS] = {
 
 /* Columns that give up their room first when the flexible one is narrow. */
 static const size_t list_drop[] = { SORT_MODIFIED, SORT_SIZE, SORT_SESSIONS };
-static const size_t session_drop[] = { 3, 0, 2, 4 };
+static const size_t session_drop[] = { 4, 1, 3, 5, 0 };
 static const size_t trash_drop[] = { 2, 1 };
 
 /* The title of the lower panel while a change is prepared, per action. */
 static const char *const plan_titles[] = {
 	"", "tui.plan.move", "tui.plan.fix", "tui.plan.remove",
-	"tui.plan.prune", "tui.plan.restore", "tui.plan.delete"
+	"tui.plan.prune", "tui.plan.restore", "tui.plan.delete",
+	"tui.plan.remove"
 };
 
 static const char *const questions[] = {
-	"", "", "", "tui.ask.remove", "tui.ask.prune", "", "tui.ask.delete"
+	"", "", "", "tui.ask.remove", "tui.ask.prune", "", "tui.ask.delete",
+	"tui.ask.remove.sessions"
 };
 
 /* Line drawing and arrows need UTF-8; other locales get ASCII. */
@@ -244,6 +246,10 @@ static void draw_title(struct tui *t, struct screen *s)
 	screen_text(s, 0, 0, s->cols, "", bar, 0);
 	if (t->screen == SCREEN_HELP) {
 		screen_text(s, 1, 0, s->cols - 1, msg("tui.title.help"), bar, 0);
+		return;
+	}
+	if (t->screen == SCREEN_VIEW) {
+		screen_text(s, 1, 0, s->cols - 1, t->conv_title, bar, 0);
 		return;
 	}
 	if (t->screen == SCREEN_TRASH && t->trash.path != NULL)
@@ -455,10 +461,13 @@ static void draw_details(struct tui *t, struct screen *s, size_t y0,
 	}
 	for (c = 0; c < TUI_SESSION_COLUMNS; c++)
 		headers[c] = xstrdup(msg(tui_session_headers[c]));
-	tui_fit_columns(det->widths, TUI_SESSION_COLUMNS, 5, session_drop,
-	    sizeof session_drop / sizeof session_drop[0], s->cols, widths);
-	draw_row(s, 0, y0 + DETAIL_HEAD - 1, headers, widths,
-	    TUI_SESSION_COLUMNS, 1U << 2, head, NULL);
+	/* Marks go before the rows, as in the list. */
+	tui_fit_columns(det->widths, TUI_SESSION_COLUMNS,
+	    TUI_SESSION_COLUMNS - 1, session_drop,
+	    sizeof session_drop / sizeof session_drop[0], s->cols - TUI_MARK,
+	    widths);
+	draw_row(s, TUI_MARK, y0 + DETAIL_HEAD - 1, headers, widths,
+	    TUI_SESSION_COLUMNS, 1U << 3, head, NULL);
 	for (c = 0; c < TUI_SESSION_COLUMNS; c++)
 		free(headers[c]);
 	if (t->detail_follow)
@@ -468,9 +477,11 @@ static void draw_details(struct tui *t, struct screen *s, size_t y0,
 		row = plain;
 		if (t->focus == FOCUS_DETAILS && t->detail_top + n == t->detail_cursor)
 			row = chosen(t, s);
-		draw_row(s, 0, y0 + DETAIL_HEAD + n,
+		draw_row(s, TUI_MARK, y0 + DETAIL_HEAD + n,
 		    det->cells + (t->detail_top + n) * TUI_SESSION_COLUMNS, widths,
-		    TUI_SESSION_COLUMNS, 1U << 2, row, NULL);
+		    TUI_SESSION_COLUMNS, 1U << 3, row, NULL);
+		draw_mark(s, y0 + DETAIL_HEAD + n,
+		    det->marked[t->detail_top + n], row);
 	}
 }
 
@@ -504,6 +515,14 @@ static void draw_trash_details(struct tui *t, struct screen *s, size_t y0,
 	    t->trash.cells[t->trash.cursor * TRASH_COLUMNS + 1]), plain);
 	x = draw_piece(s, x, y0 + 3, msg_text("show.size",
 	    t->trash.cells[t->trash.cursor * TRASH_COLUMNS + 2]), plain);
+	/* A single session never takes the projects entry with it. */
+	if (e->session != NULL) {
+		value = text_clean(e->session);
+		draw_piece(s, x, y0 + 3, msg_text("tui.trash.session", value),
+		    plain);
+		free(value);
+		return;
+	}
 	value = e->projects_key != NULL ? text_clean(e->projects_key) :
 	    xstrdup(msg("value.none"));
 	draw_piece(s, x, y0 + 3, msg_text("tui.trash.config", value), plain);
@@ -653,6 +672,68 @@ static void draw_help(struct tui *t, struct screen *s, size_t y0, size_t rows)
 	for (n = 0; n < rows && t->help_top + n < t->help_count; n++)
 		screen_text(s, 1, y0 + n, width, t->help_lines[t->help_top + n],
 		    plain, 0);
+}
+
+/*
+ * The attribute of a line of the session view: each side's header a bar
+ * across the screen (the user's grey, Claude's blue), tool lines grey.
+ */
+static struct attr view_attr(const struct tui *t, const struct screen *s,
+    enum view_style st)
+{
+	struct attr a = plain;
+
+	switch (st) {
+	case VIEW_HEAD_USER:
+		if (s->color)
+			a = bar_attr(t);
+		a.style |= STYLE_BOLD | (s->color ? 0 : STYLE_UNDERLINE);
+		return a;
+	case VIEW_HEAD_CLAUDE:
+		a = chosen(t, s);
+		a.style |= STYLE_BOLD;
+		return a;
+	case VIEW_TOOL:
+	case VIEW_NOTE:
+		return grey(t, s);
+	default:
+		return a;
+	}
+}
+
+/*
+ * The conversation of one session over both panels. Its lines are made
+ * again when the width changes; the place in it stays: at the end when
+ * it was there, else as far in as it was.
+ */
+static void draw_view(struct tui *t, struct screen *s, size_t y0, size_t rows)
+{
+	struct attr a;
+	size_t width = s->cols - 2, n, old, last;
+	int at_end;
+
+	if (t->conv_lines == NULL || t->conv_width != width) {
+		old = t->conv_count;
+		last = old > t->conv_rows ? old - t->conv_rows : 0;
+		at_end = t->conv_lines == NULL || t->conv_top >= last;
+		transcript_lines_free(t->conv_lines, t->conv_count);
+		t->conv_lines = transcript_lines(&t->conv, width,
+		    &t->conv_count);
+		t->conv_width = width;
+		if (at_end)
+			t->conv_top = (size_t)-1;
+		else if (old > 0)
+			t->conv_top = t->conv_top * t->conv_count / old;
+	}
+	t->conv_rows = rows;
+	clamp_top(&t->conv_top, t->conv_count, rows);
+	for (n = 0; n < rows && t->conv_top + n < t->conv_count; n++) {
+		a = view_attr(t, s, t->conv_lines[t->conv_top + n].style);
+		if (a.bg != COLOR_DEFAULT || (a.style & STYLE_REVERSE))
+			screen_text(s, 0, y0 + n, s->cols, "", a, 0);
+		screen_text(s, 1, y0 + n, width,
+		    t->conv_lines[t->conv_top + n].text, a, 0);
+	}
 }
 
 /* The panel under the path field: what it is for, then the suggestions. */
@@ -889,6 +970,7 @@ static void draw_alert(struct tui *t, struct screen *s)
 /* The hint of the screen when nothing more important is to say. */
 static char *hint(const struct tui *t)
 {
+	const struct tui_details *det;
 	char *a, *b, *out;
 	size_t i, n;
 
@@ -896,14 +978,25 @@ static char *hint(const struct tui *t)
 		return xstrdup(msg("tui.hint.settings"));
 	if (t->screen == SCREEN_HELP)
 		return xstrdup(msg("tui.hint.help"));
+	if (t->screen == SCREEN_VIEW)
+		return xstrdup(msg("tui.hint.view"));
 	if (t->screen == SCREEN_TRASH) {
 		a = format_size(t->trash.total);
 		out = msg_text("tui.hint.trash", a);
 		free(a);
 		return out;
 	}
-	if (t->focus == FOCUS_DETAILS)
-		return xstrdup(msg("tui.hint.details"));
+	if (t->focus == FOCUS_DETAILS && t->view_count > 0) {
+		det = &t->details[tui_selected(t)];
+		for (i = 0, n = 0; det->loaded && i < det->count; i++)
+			n += det->marked[i] != 0;
+		if (n == 0)
+			return xstrdup(msg("tui.hint.details"));
+		a = format_count(n);
+		out = msg_text("tui.hint.marked.sessions", a);
+		free(a);
+		return out;
+	}
 	if (t->filter[0] != '\0') {
 		a = format_count(t->view_count);
 		b = format_count(t->inv.count);
@@ -1035,6 +1128,14 @@ void tui_render(struct tui *t, struct screen *s)
 		t->list_rows = t->lower_rows = 0;
 		t->sep_y = NONE;
 		draw_help(t, s, t->list_y, t->buttons_y - t->list_y);
+		draw_buttons(t, s, t->buttons_y);
+		draw_status(t, s, t->status_y);
+		return;
+	}
+	if (t->screen == SCREEN_VIEW) {
+		t->list_rows = t->lower_rows = 0;
+		t->sep_y = NONE;
+		draw_view(t, s, t->list_y, t->buttons_y - t->list_y);
 		draw_buttons(t, s, t->buttons_y);
 		draw_status(t, s, t->status_y);
 		return;

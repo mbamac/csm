@@ -30,6 +30,7 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "debug.h"
 #include "fileio.h"
 #include "format.h"
 #include "inventory.h"
@@ -106,6 +107,8 @@ static char *meta_text(const struct trash_entry *e)
 	when = format_iso(e->removed);
 	s = xstrdup("{");
 	s = add_field(s, "dir", e->dir);
+	if (e->session != NULL)
+		s = add_field(s, "session", e->session);
 	s = add_field(s, "path", e->origin);
 	s = add_field(s, "project", e->project);
 	s = add_field(s, "configDir", e->config_dir);
@@ -179,6 +182,7 @@ static void meta_read(struct trash_entry *e)
 		return;
 	}
 	e->dir = json_top_string(data, "dir");
+	e->session = json_top_string(data, "session");
 	e->origin = json_top_string(data, "path");
 	e->project = json_top_string(data, "project");
 	e->config_dir = json_top_string(data, "configDir");
@@ -276,6 +280,7 @@ void trash_entry_free(struct trash_entry *e)
 	free(e->name);
 	free(e->path);
 	free(e->dir);
+	free(e->session);
 	free(e->origin);
 	free(e->project);
 	free(e->config_dir);
@@ -454,6 +459,177 @@ done:
 	free(dest);
 	free(value);
 	free(out);
+	free(trash);
+}
+
+static int compare_strings(const void *a, const void *b)
+{
+	return strcmp(*(char *const *)a, *(char *const *)b);
+}
+
+/*
+ * The names in dir that belong to the session id: id itself (the
+ * directory of its subagents and tool results) and id.* (the .jsonl file
+ * and whatever else Claude Code keeps next to it). -1 with errno.
+ */
+static int session_entries(const char *dir, const char *id, char ***names,
+    size_t *count)
+{
+	struct dirent *d;
+	size_t len = strlen(id);
+	DIR *dp;
+
+	*names = NULL;
+	*count = 0;
+	dp = opendir(dir);
+	if (dp == NULL)
+		return -1;
+	while ((d = readdir(dp)) != NULL) {
+		if (strncmp(d->d_name, id, len) != 0 ||
+		    (d->d_name[len] != '\0' && d->d_name[len] != '.'))
+			continue;
+		*names = xrealloc(*names, (*count + 1) * sizeof **names);
+		(*names)[(*count)++] = xstrdup(d->d_name);
+	}
+	closedir(dp);
+	if (*count > 0)
+		qsort(*names, *count, sizeof **names, compare_strings);
+	return 0;
+}
+
+static void free_names(char **names, size_t count)
+{
+	size_t i;
+
+	for (i = 0; i < count; i++)
+		free(names[i]);
+	free(names);
+}
+
+/*
+ * Moves the first count names from the directory from to the directory
+ * to; the number moved. A failure is noted.
+ */
+static size_t move_names(struct move_ctx *ctx, char **names, size_t count,
+    const char *from, const char *to)
+{
+	char *f, *t;
+	size_t i;
+	int failed;
+
+	for (i = 0; i < count; i++) {
+		f = xjoin(from, names[i]);
+		t = xjoin(to, names[i]);
+		failed = move_tree(f, t) != 0;
+		if (failed)
+			move_note(ctx, NOTE_ERROR, "error.move", f, NULL,
+			    errno);
+		free(f);
+		free(t);
+		if (failed)
+			break;
+	}
+	return i;
+}
+
+/* Whether every name is in to and none is left in from. */
+static int names_moved(char **names, size_t count, const char *from,
+    const char *to)
+{
+	struct stat st;
+	char *f, *t;
+	size_t i;
+	int ok = 1;
+
+	for (i = 0; i < count && ok; i++) {
+		f = xjoin(from, names[i]);
+		t = xjoin(to, names[i]);
+		ok = lstat(t, &st) == 0 && lstat(f, &st) != 0 &&
+		    errno == ENOENT;
+		free(f);
+		free(t);
+	}
+	return ok;
+}
+
+/*
+ * Moves one session of a directory to the trash: everything named id or
+ * id.* in it. The entry holds a session directory of the same name with
+ * just those, so restoring merges them back as in 4.3. The rest of the
+ * directory and .claude.json stay; a directory left empty goes. A failed
+ * move puts back what went before it.
+ */
+void trash_remove_session(struct move_ctx *ctx,
+    const struct session_dir_info *d, const char *id)
+{
+	struct trash_entry e;
+	char *trash, **names = NULL, *dest = NULL, *name;
+	size_t count = 0, moved;
+
+	memset(&e, 0, sizeof e);
+	trash = trash_path(ctx);
+	if (trash == NULL) {
+		move_note(ctx, NOTE_ERROR, "error.trash.home", NULL, NULL, 0);
+		return;
+	}
+	if (session_entries(d->path, id, &names, &count) != 0) {
+		move_note(ctx, NOTE_ERROR, "error.read", d->path, NULL, errno);
+		goto done;
+	}
+	if (count == 0) {
+		move_note(ctx, NOTE_ERROR, "error.session.gone", id, d->path,
+		    0);
+		goto done;
+	}
+	if (!ctx->apply)
+		goto done;
+	e.removed = time(NULL);
+	e.path = new_entry(ctx, trash, id, e.removed);
+	if (e.path == NULL)
+		goto done;
+	e.dir = d->name;
+	e.session = (char *)id;
+	e.origin = d->path;
+	e.project = d->project;
+	e.config_dir = ctx->config_dir;
+	e.config_file = ctx->config_file;
+	if (meta_write(&e) != 0) {
+		move_note(ctx, NOTE_ERROR, "error.trash", e.path, NULL, errno);
+		drop_entry(e.path);
+		goto done;
+	}
+	dest = xjoin(e.path, d->name);
+	if (mkdir(dest, 0700) != 0) {
+		move_note(ctx, NOTE_ERROR, "error.trash", dest, NULL, errno);
+		drop_entry(e.path);
+		goto done;
+	}
+	moved = move_names(ctx, names, count, d->path, dest);
+	if (moved < count) {
+		if (move_names(ctx, names, moved, dest, d->path) == moved) {
+			rmdir(dest);
+			drop_entry(e.path);
+		} else {
+			move_note(ctx, NOTE_ERROR, "error.remove.partial",
+			    e.path, d->path, 0);
+		}
+		goto done;
+	}
+	if (!names_moved(names, count, d->path, dest)) {
+		move_note(ctx, NOTE_ERROR, "error.remove.unconfirmed", d->path,
+		    e.path, 0);
+		goto done;
+	}
+	/* Fails, as it should, while anything else is left in it. */
+	if (rmdir(d->path) == 0)
+		DEBUG_LOG("rmdir %s: ok", d->path);
+	name = path_base(e.path);
+	move_note(ctx, NOTE_INFO, "remove.trash", name, NULL, 0);
+	free(name);
+done:
+	free_names(names, count);
+	free(e.path);
+	free(dest);
 	free(trash);
 }
 

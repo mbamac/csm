@@ -456,6 +456,49 @@ run 0 -u
 ok "empty trash says so" has_output "^The trash is empty\.\$"
 unset XDG_DATA_HOME
 
+# -r with a session id: its file, its directory and its other files go,
+# the rest of the session directory and .claude.json stay; -u puts it back.
+scenario session
+XDG_DATA_HOME=$HOME/.local/share
+export XDG_DATA_HOME
+TRASH=$(trash_dir)
+mkdir -p repo
+DIR=$PROJ/$(enc "$S/repo")
+ONE=0a1b2c3d-1111-4111-8111-111111111111
+TWO=0a1b2c3d-2222-4222-8222-222222222222
+session "$DIR/$ONE.jsonl" "$S/repo"
+session "$DIR/$ONE/subagents/agent-1.jsonl" "$S/repo"
+echo '{}' > "$DIR/$ONE.desktop-released.json"
+session "$DIR/$TWO.jsonl" "$S/repo"
+mkdir -p "$DIR/memory"
+echo note > "$DIR/memory/MEMORY.md"
+old_time "$DIR/$ONE.jsonl"
+printf '{"projects":{"%s":{}}}\n' "$S/repo" > "$CONFIG"
+cp "$CONFIG" "$S/config.orig"
+snapshot "$DIR" > "$WORK/session.before"
+run 1 -ry 0a1b2c3d
+ok "ambiguous start of an id reported" has_output "more than one session (2)"
+snapshot "$DIR" > "$WORK/session.same"
+ok "nothing goes on an ambiguous id" cmp -s "$WORK/session.before" "$WORK/session.same"
+run 0 -ry 0a1b2c3d-1
+ok "plan names the session" has_output "^to the trash: session $ONE of $S/repo (active)\$"
+ok "session file gone" [ ! -e "$DIR/$ONE.jsonl" ]
+ok "its directory gone" [ ! -e "$DIR/$ONE" ]
+ok "its other files gone" [ ! -e "$DIR/$ONE.desktop-released.json" ]
+ok "other session stays" [ -f "$DIR/$TWO.jsonl" ]
+ok "memory stays" [ -f "$DIR/memory/MEMORY.md" ]
+ok ".claude.json unchanged" cmp -s "$CONFIG" "$S/config.orig"
+ok "no .claude.json.bak" [ ! -e "$CONFIG.bak" ]
+ENTRY=$(ls "$TRASH")
+ok "entry named by the session" [ "${ENTRY#*Z-}" = "$ONE" ]
+ok "metadata names the session" contains "$TRASH/$ENTRY/meta.json" "\"session\": \"$ONE\""
+run 0 -u "$ENTRY"
+snapshot "$DIR" > "$WORK/session.after"
+ok "session back as it was" cmp -s "$WORK/session.before" "$WORK/session.after"
+ok "session time kept" kept_time "$DIR/$ONE.jsonl"
+ok "entry leaves the trash" [ ! -e "$TRASH/$ENTRY" ]
+unset XDG_DATA_HOME
+
 # csm -P forgets githubRepoPaths that are gone, and only those: a path
 # behind a dangling symlink may be on a disk that is not connected, and the
 # rest of .claude.json stays byte for byte.

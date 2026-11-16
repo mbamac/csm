@@ -53,8 +53,9 @@ _Static_assert(UI_SORTS == TUI_COLUMNS, "every list column has a word");
 static void restore_state(struct tui *t);
 
 const char *const tui_session_headers[TUI_SESSION_COLUMNS] = {
-	"show.col.started", "show.col.modified", "show.col.messages",
-	"show.col.branch", "show.col.title", "show.col.prompt"
+	"show.col.id", "show.col.started", "show.col.modified",
+	"show.col.messages", "show.col.branch", "show.col.title",
+	"show.col.prompt"
 };
 
 static int ascii_lower(int c)
@@ -200,6 +201,7 @@ static void reset_details(struct tui *t)
 {
 	t->detail_cursor = 0;
 	t->detail_top = 0;
+	t->detail_anchor = 0;
 	t->detail_follow = 1;
 }
 
@@ -237,7 +239,11 @@ static void free_details(struct tui_details *d)
 		return;
 	for (i = 0; i < d->count * TUI_SESSION_COLUMNS; i++)
 		free(d->cells[i]);
+	for (i = 0; i < d->count; i++)
+		free(d->ids[i]);
 	free(d->cells);
+	free(d->ids);
+	free(d->marked);
 	d->loaded = 0;
 }
 
@@ -491,24 +497,30 @@ void tui_load(struct tui *t, size_t dir)
 	session_files_free(files, count);
 	qsort(infos, n, sizeof *infos, session_compare);
 	d->cells = xmalloc((n * TUI_SESSION_COLUMNS + 1) * sizeof *d->cells);
+	d->ids = xmalloc((n + 1) * sizeof *d->ids);
+	d->marked = xmalloc(n + 1);
+	memset(d->marked, 0, n + 1);
 	for (c = 0; c < TUI_SESSION_COLUMNS; c++)
 		d->widths[c] = text_width(msg(tui_session_headers[c]));
 	for (i = 0; i < n; i++) {
 		row = d->cells + i * TUI_SESSION_COLUMNS;
-		row[0] = format_time(infos[i].started);
-		row[1] = format_time(infos[i].modified);
-		row[2] = format_count(infos[i].messages);
-		row[3] = infos[i].branch != NULL ? text_clean(infos[i].branch) :
+		row[0] = session_id_short(infos[i].id);
+		row[1] = format_time(infos[i].started);
+		row[2] = format_time(infos[i].modified);
+		row[3] = format_count(infos[i].messages);
+		row[4] = infos[i].branch != NULL ? text_clean(infos[i].branch) :
 		    xstrdup(msg("value.none"));
-		row[4] = infos[i].title != NULL ? text_clean(infos[i].title) :
+		row[5] = infos[i].title != NULL ? text_clean(infos[i].title) :
 		    xstrdup(msg("value.none"));
-		row[5] = infos[i].prompt != NULL ? text_clean(infos[i].prompt) :
+		row[6] = infos[i].prompt != NULL ? text_clean(infos[i].prompt) :
 		    xstrdup(msg("value.none"));
 		for (c = 0; c < TUI_SESSION_COLUMNS; c++) {
 			w = text_width(row[c]);
 			if (w > d->widths[c])
 				d->widths[c] = w;
 		}
+		d->ids[i] = infos[i].id;
+		infos[i].id = NULL;
 		session_info_free(&infos[i]);
 	}
 	for (c = 0; c < TUI_SESSION_COLUMNS - 1; c++)
@@ -688,6 +700,11 @@ static const char *why_list(const struct tui *t, char key)
 		return "tui.why.claude";
 	if (key == 'U')
 		return t->github_dead == 0 ? "tui.why.prune" : NULL;
+	/* With the session table in focus Remove takes its sessions. */
+	if (key == 'r' && t->focus == FOCUS_DETAILS && t->view_count > 0)
+		return t->details[tui_selected(t)].loaded &&
+		    t->details[tui_selected(t)].count > 0 ? NULL :
+		    "tui.why.no_session";
 	if (key == 'r' && count_marked(t->marked, t->inv.count) > 0)
 		return NULL;
 	if (t->view_count == 0)
@@ -764,6 +781,14 @@ void tui_make_buttons(struct tui *t)
 	}
 	if (t->screen == SCREEN_HELP) {
 		add_button(t, KEY_ESC, "Esc", "tui.button.close", NULL);
+		add_button(t, KEY_CHAR, "q", "tui.button.quit", NULL);
+		return;
+	}
+	if (t->screen == SCREEN_VIEW) {
+		add_button(t, KEY_ESC, "Esc", "tui.button.back_list", NULL);
+		add_button(t, KEY_HOME, "Home", "tui.button.start", NULL);
+		add_button(t, KEY_END, "End", "tui.button.end", NULL);
+		add_button(t, KEY_CHAR, "?", "tui.button.help", NULL);
 		add_button(t, KEY_CHAR, "q", "tui.button.quit", NULL);
 		return;
 	}
@@ -861,6 +886,7 @@ static void run_action(struct tui *t, struct move_ctx *ctx, struct report *r)
 {
 	const struct session_dir_info *d;
 	const struct trash_entry *e;
+	const char *id;
 	char *path, *a, *b, *c;
 	size_t i;
 
@@ -878,17 +904,25 @@ static void run_action(struct tui *t, struct move_ctx *ctx, struct report *r)
 			report_plan(r, ctx);
 		break;
 	case ACTION_REMOVE:
+	case ACTION_REMOVE_SESSION:
 		for (i = 0; i < t->target_count; i++) {
-			d = &t->inv.dirs[t->targets[i]];
-			a = text_clean(d->name);
+			d = &t->inv.dirs[t->action == ACTION_REMOVE ?
+			    t->targets[i] : t->action_dir];
+			id = t->action == ACTION_REMOVE ? NULL :
+			    t->details[t->action_dir].ids[t->targets[i]];
+			a = text_clean(id != NULL ? id : d->name);
 			b = d->project != NULL ? format_project(d, t->paths.home) :
 			    xstrdup(msg("value.none"));
 			c = format_state(d->state);
-			report_add(r, NOTE_INFO, 0, msg_text("remove.dir", a, b, c));
+			report_add(r, NOTE_INFO, 0, msg_text(id != NULL ?
+			    "remove.session" : "remove.dir", a, b, c));
 			free(a);
 			free(b);
 			free(c);
-			trash_remove(ctx, d);
+			if (id != NULL)
+				trash_remove_session(ctx, d, id);
+			else
+				trash_remove(ctx, d);
 			report_notes(r, ctx, 0);
 			move_clear(ctx);
 		}
@@ -931,6 +965,8 @@ static void log_action(const struct tui *t, const char *what)
 	for (i = 0; i < t->target_count; i++)
 		DEBUG_LOG("  target %s", t->screen == SCREEN_TRASH ?
 		    t->trash.entries[t->targets[i]].name :
+		    t->action == ACTION_REMOVE_SESSION ?
+		    t->details[t->action_dir].ids[t->targets[i]] :
 		    t->inv.dirs[t->targets[i]].name);
 }
 
@@ -963,7 +999,8 @@ static void start_plan(struct tui *t)
 #endif
 	t->mode = MODE_PLAN;
 	t->confirm = !has_errors(t) && (t->action == ACTION_REMOVE ||
-	    t->action == ACTION_PRUNE || t->action == ACTION_DELETE);
+	    t->action == ACTION_REMOVE_SESSION || t->action == ACTION_PRUNE ||
+	    t->action == ACTION_DELETE);
 	t->yes = 0;
 }
 
@@ -983,8 +1020,10 @@ static char *done_text(const struct tui *t)
 		free(b);
 		return out;
 	case ACTION_REMOVE:
+	case ACTION_REMOVE_SESSION:
 		a = format_count(t->target_count);
-		out = msg_text("tui.done.remove", a);
+		out = msg_text(t->action == ACTION_REMOVE ? "tui.done.remove" :
+		    "tui.done.remove.sessions", a);
 		free(a);
 		return out;
 	case ACTION_PRUNE:
@@ -1218,12 +1257,23 @@ static void plan_keys(struct tui *t, const struct key *k)
 	}
 }
 
+/* Space marks a directory of the list or a session of the table in focus. */
 static void toggle_mark(struct tui *t)
 {
+	struct tui_details *d;
 	size_t i = tui_selected(t);
 
 	if (i == NONE)
 		return;
+	if (t->focus == FOCUS_DETAILS) {
+		d = &t->details[i];
+		if (!d->loaded || t->detail_cursor >= d->count)
+			return;
+		d->marked[t->detail_cursor] = !d->marked[t->detail_cursor];
+		t->detail_anchor = t->detail_cursor;
+		t->detail_follow = 1;
+		return;
+	}
 	t->marked[i] = !t->marked[i];
 	t->anchor = t->cursor;
 	t->list_follow = 1;
@@ -1291,6 +1341,94 @@ static void help_keys(struct tui *t, const struct key *k)
 	}
 }
 
+static void free_conv(struct tui *t)
+{
+	transcript_lines_free(t->conv_lines, t->conv_count);
+	transcript_free(&t->conv);
+	free(t->conv_title);
+	t->conv_lines = NULL;
+	t->conv_count = t->conv_width = t->conv_top = 0;
+	t->conv_title = NULL;
+}
+
+/*
+ * The conversation of the session under the cursor of the table, over
+ * both panels. It opens at its end, the newest messages; the lines are
+ * made by the first frame, for its width.
+ */
+static void open_view(struct tui *t)
+{
+	const struct tui_details *d;
+	const char *title;
+	char *name, *file, *shown;
+	size_t dir = tui_selected(t);
+
+	d = &t->details[dir];
+	if (!d->loaded || t->detail_cursor >= d->count)
+		return;
+	free_conv(t);
+	name = xmalloc(strlen(d->ids[t->detail_cursor]) + 7);
+	sprintf(name, "%s.jsonl", d->ids[t->detail_cursor]);
+	file = xjoin(t->inv.dirs[dir].path, name);
+	free(name);
+	busy(t, "tui.busy.view");
+	if (transcript_read(file, &t->conv) != 0) {
+		busy(t, NULL);
+		shown = path_tilde(file, t->paths.home);
+		set_text(&t->error, msg_text("error.read", shown,
+		    strerror(errno)));
+		free(shown);
+		free(file);
+		return;
+	}
+	busy(t, NULL);
+	free(file);
+	/* The name of the session, else the start of its id, as the table. */
+	title = d->cells[t->detail_cursor * TUI_SESSION_COLUMNS + 5];
+	if (strcmp(title, msg("value.none")) == 0)
+		title = d->cells[t->detail_cursor * TUI_SESSION_COLUMNS];
+	t->conv_title = msg_text("tui.title.view", title);
+	t->conv_top = (size_t)-1;
+	t->screen = SCREEN_VIEW;
+}
+
+static void view_keys(struct tui *t, const struct key *k)
+{
+	size_t rows = t->conv_rows > 1 ? t->conv_rows - 1 : 1;
+
+	switch (k->code) {
+	case KEY_CHAR:
+		if (strcmp(k->text, "q") == 0)
+			t->quit = 1;
+		else if (strcmp(k->text, "?") == 0 || strcmp(k->text, "h") == 0)
+			open_help(t);
+		break;
+	case KEY_ESC:
+		free_conv(t);
+		t->screen = SCREEN_LIST;
+		break;
+	case KEY_UP:
+	case KEY_PAGE_UP:
+		scroll_by(&t->conv_top, t->conv_count, t->conv_rows, 0,
+		    k->code == KEY_UP ? 1 : rows);
+		break;
+	case KEY_DOWN:
+	case KEY_PAGE_DOWN:
+		scroll_by(&t->conv_top, t->conv_count, t->conv_rows, 1,
+		    k->code == KEY_DOWN ? 1 : rows);
+		break;
+	case KEY_HOME:
+		t->conv_top = 0;
+		break;
+	case KEY_END:
+		/* The frame clamps it to the last screenful. */
+		t->conv_top = (size_t)-1;
+		break;
+	default:
+		break;
+	}
+}
+
 static void press(struct tui *t, char key)
 {
 	const char *why;
@@ -1332,8 +1470,16 @@ static void press(struct tui *t, char key)
 		start_field(t, ACTION_FIX);
 		break;
 	case 'r':
-		t->action = ACTION_REMOVE;
-		choose_targets(t, t->marked, t->inv.count, tui_selected(t));
+		if (t->focus == FOCUS_DETAILS) {
+			t->action = ACTION_REMOVE_SESSION;
+			t->action_dir = tui_selected(t);
+			choose_targets(t, t->details[t->action_dir].marked,
+			    t->details[t->action_dir].count, t->detail_cursor);
+		} else {
+			t->action = ACTION_REMOVE;
+			choose_targets(t, t->marked, t->inv.count,
+			    tui_selected(t));
+		}
 		start_plan(t);
 		break;
 	case 'U':
@@ -1370,7 +1516,10 @@ static void list_keys(struct tui *t, const struct key *k)
 			t->focus = FOCUS_DETAILS;
 		break;
 	case KEY_ENTER:
-		if (t->view_count > 0)
+		/* Enter: the session in the table, the details on the list. */
+		if (t->focus == FOCUS_DETAILS)
+			open_view(t);
+		else if (t->view_count > 0)
 			t->focus = FOCUS_DETAILS;
 		break;
 	case KEY_ESC:
@@ -1392,9 +1541,9 @@ static void list_keys(struct tui *t, const struct key *k)
 			break;
 		}
 		d = &t->details[tui_selected(t)];
-		if (d->loaded)
-			move_cursor(&t->detail_cursor, d->count, t->detail_rows,
-			    k->code);
+		if (d->loaded && move_cursor(&t->detail_cursor, d->count,
+		    t->detail_rows, k->code))
+			t->detail_anchor = t->detail_cursor;
 		t->detail_follow = 1;
 		break;
 	}
@@ -1520,7 +1669,7 @@ static void settings_keys(struct tui *t, const struct key *k)
 }
 
 /* A click on row pos of a list: Ctrl adds or takes one, Shift a range. */
-static void click_row(struct tui *t, size_t *cursor, char *marked,
+static void click_row(size_t *anchor, size_t *cursor, char *marked,
     const size_t *index, size_t pos, unsigned mods)
 {
 	size_t i, from, to;
@@ -1528,14 +1677,14 @@ static void click_row(struct tui *t, size_t *cursor, char *marked,
 	if (mods & MOD_CTRL) {
 		i = index != NULL ? index[pos] : pos;
 		marked[i] = !marked[i];
-		t->anchor = pos;
+		*anchor = pos;
 	} else if (mods & MOD_SHIFT) {
-		from = t->anchor < pos ? t->anchor : pos;
-		to = t->anchor < pos ? pos : t->anchor;
+		from = *anchor < pos ? *anchor : pos;
+		to = *anchor < pos ? pos : *anchor;
 		for (i = from; i <= to; i++)
 			marked[index != NULL ? index[i] : i] = 1;
 	} else {
-		t->anchor = pos;
+		*anchor = pos;
 	}
 	*cursor = pos;
 }
@@ -1572,6 +1721,12 @@ static void wheel(struct tui *t, const struct key *k)
 	if (t->screen == SCREEN_HELP) {
 		if (inside(k->y, t->list_y, t->help_rows))
 			scroll_by(&t->help_top, t->help_count, t->help_rows,
+			    down, WHEEL_STEP);
+		return;
+	}
+	if (t->screen == SCREEN_VIEW) {
+		if (inside(k->y, t->list_y, t->conv_rows))
+			scroll_by(&t->conv_top, t->conv_count, t->conv_rows,
 			    down, WHEEL_STEP);
 		return;
 	}
@@ -1675,15 +1830,16 @@ static void click(struct tui *t, const struct key *k, int dbl)
 		if (t->screen == SCREEN_TRASH) {
 			pos = t->trash.top + (k->y - t->list_y - 1);
 			if (pos < t->trash.count)
-				click_row(t, &t->trash.cursor, t->trash.marked,
-				    NULL, pos, k->mods);
+				click_row(&t->anchor, &t->trash.cursor,
+				    t->trash.marked, NULL, pos, k->mods);
 			return;
 		}
 		pos = t->top + (k->y - t->list_y - 1);
 		if (pos >= t->view_count)
 			return;
 		i = tui_selected(t);
-		click_row(t, &t->cursor, t->marked, t->view, pos, k->mods);
+		click_row(&t->anchor, &t->cursor, t->marked, t->view, pos,
+		    k->mods);
 		if (tui_selected(t) != i)
 			reset_details(t);
 		if (dbl)
@@ -1697,7 +1853,10 @@ static void click(struct tui *t, const struct key *k, int dbl)
 		if (!d->loaded || pos >= d->count)
 			return;
 		t->focus = FOCUS_DETAILS;
-		t->detail_cursor = pos;
+		click_row(&t->detail_anchor, &t->detail_cursor, d->marked, NULL,
+		    pos, k->mods);
+		if (dbl)
+			open_view(t);
 	}
 }
 
@@ -1768,6 +1927,8 @@ void tui_key(struct tui *t, const struct key *k)
 		trash_keys(t, k);
 	else if (t->screen == SCREEN_SETTINGS)
 		settings_keys(t, k);
+	else if (t->screen == SCREEN_VIEW)
+		view_keys(t, k);
 	else
 		list_keys(t, k);
 }
@@ -1784,6 +1945,7 @@ void tui_free(struct tui *t)
 	free(t->state_path);
 	free(t->state_saved);
 	text_lines_free(t->help_lines, t->help_count);
+	free_conv(t);
 	claude_paths_free(&t->paths);
 }
 

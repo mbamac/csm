@@ -160,6 +160,57 @@ expect 0 '–  *–  *bye$' -s -- -gone
 expect 0 '^Session directory: -gone$' -s -- -gone
 expect 0 '^Project: –$' -s -- -mem
 expect 1 '^csm: there are no sessions for “nowhere”' -s nowhere
+expect 0 '^ID  *STARTED  *LAST CHANGE  *MESSAGES' -s "$HOME/repo"
+expect 0 '^s1  ' -s "$HOME/repo"
+
+# -r takes a session by the start of its id, 8 characters at least.
+for ID in abcdef01-1111-4111 abcdef01-2222-4222
+do
+	printf '{"type":"user","cwd":"%s","message":{"content":"x"}}\n' \
+	    "$HOME/gone" > "$PROJ/-gone/$ID.jsonl"
+done
+expect 0 '^abcdef01  ' -s -- -gone
+expect 1 '^csm: “abcdef01” starts the id of more than one session (2)' \
+    -r -n abcdef01
+expect 0 '^to the trash: session abcdef01-2222-4222 of ~/gone (orphaned)$' \
+    -r -n abcdef01-2
+expect 1 'there are no sessions for “abcdef0”' -r -n abcdef0
+expect 0 '^to the trash: -gone ' -r -n abcdef01-2 -- -gone
+# A session named twice goes once; one in a directory that goes, with it.
+# ARGS is split into words on purpose: each string is one command line.
+for ARGS in "abcdef01-2 abcdef01-2222-4222" "abcdef01-2 -- -gone"
+do
+	CHECKS=$((CHECKS + 1))
+	N=$("$CSM" -r -n $ARGS | grep -c '^to the trash')
+	if [ "$N" -ne 1 ]
+	then
+		FAILURES=$((FAILURES + 1))
+		echo "cli: csm -r -n $ARGS: $N plan lines, want 1"
+	fi
+done
+rm -f "$PROJ"/-gone/abcdef01-*.jsonl
+
+# -v shows one conversation; into a pipe it goes plain and whole.
+VIEW=$PROJ/-gone/fedcba98-0000.jsonl
+printf '{"type":"user","cwd":"%s","message":{"content":"hello view"}}\n' \
+    "$HOME/gone" > "$VIEW"
+TOOL='{"type":"tool_use","name":"Bash","input":{"command":"ls -l"}}'
+printf '{"type":"assistant","message":{"content":[%s]}}\n' "$TOOL" >> "$VIEW"
+expect 0 '^You · –$' -v fedcba98
+expect 0 '^  hello view$' --view fedcba98-0000
+expect 0 '^  → Bash: ls -l$' -v fedcba98
+expect 1 '^csm: there is no session whose id starts with “zzzzzzzz”' -v zzzzzzzz
+expect 1 'no session whose id starts with “gone”' -v gone
+expect 2 '^csm: wrong number of arguments for “-v”' -v
+expect 2 '^csm: option “-n” does not work with “-v”' -v -n fedcba98
+expect 0 '^csm -v ID' -v -h
+CHECKS=$((CHECKS + 1))
+if "$CSM" -v fedcba98 | grep -q "$(printf '\033')"
+then
+	FAILURES=$((FAILURES + 1))
+	echo "cli: csm -v: colours in a pipe"
+fi
+rm -f "$VIEW"
 
 # -o leaves out all but the orphaned ones.
 CHECKS=$((CHECKS + 1))
