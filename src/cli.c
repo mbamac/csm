@@ -45,7 +45,7 @@
 #include "tui.h"
 #include "util.h"
 
-#define CSM_VERSION "0.4.0"
+#define CSM_VERSION "0.4.1"
 
 enum {
 	OPT_LIST,

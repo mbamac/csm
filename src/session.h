@@ -35,7 +35,7 @@
 #define SESSION_ID_SHORT 8
 
 /* The Claude Code version csm was last checked against. */
-#define SESSION_TESTED_VERSION "2.1.325"
+#define SESSION_TESTED_VERSION "2.1.326"
 
 /* Where Claude Code keeps its data for this user. */
 struct claude_paths {

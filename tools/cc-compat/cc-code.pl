@@ -119,6 +119,13 @@ my @CHECKS = (
 	}],
 	['read.head-tail', '3.2', sub {
 		my @m = find_all(qr/let [\w\$]+=Buffer\.allocUnsafe\(([\w\$]+)\),[\w\$]+=await [\w\$]+\.read\([\w\$]+,0,\1,0\);if\([\w\$]+\.bytesRead===0\)return null;let [\w\$]+=[\w\$]+\.toString\("utf8",0,[\w\$]+\.bytesRead\),[\w\$]+=Math\.max\(0,[\w\$]+\.size-\1\)/);
+		# Since 2.1.326 both chunks go through a helper that keeps reading
+		# until the buffer is full or the file ends; the chunks are the same.
+		for my $n (find_all(qr/let ([\w\$]+)=Buffer\.allocUnsafe\(([\w\$]+)\),([\w\$]+)=await ([\w\$]+)\([\w\$]+,\1,0\);if\(\3===0\)return null;let [\w\$]+=\1\.toString\("utf8",0,\3\),[\w\$]+=Math\.max\(0,[\w\$]+\.size-\2\)/)) {
+			my ($size, $helper) = @{$n->[2]}[1, 3];
+			next unless $DATA =~ /function \Q$helper\E\(([\w\$]+),([\w\$]+),([\w\$]+)\)\{let ([\w\$]+)=0;while\(\4<\Q$size\E\)\{let\{bytesRead:([\w\$]+)\}=await \1\.read\(\2,\4,\Q$size\E-\4,\3\+\4\);if\(\5<=0\)break;\4\+=\5\}return \4\}/;
+			push @m, [$n->[0], $n->[1], [$size]];
+		}
 		return (0, 'head/tail reader not found') unless @m;
 		my %sizes;
 		$sizes{const_before($_->[2][0], $_->[0]) // '?'}++ for @m;
