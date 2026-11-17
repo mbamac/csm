@@ -45,7 +45,7 @@
 #include "tui.h"
 #include "util.h"
 
-#define CSM_VERSION "0.4.1"
+#define CSM_VERSION "0.4.2"
 
 enum {
 	OPT_LIST,
@@ -815,23 +815,50 @@ static void print_removal(const struct session_dir_info *d, const char *id,
 }
 
 /*
+ * An id start that fits several sessions, on stderr: the error, then each
+ * session with its full id, project and last change. -s shows only the
+ * first 8 characters, so this is where a longer start comes from.
+ */
+static void report_ambiguous(const struct inventory *inv, const char *arg,
+    const struct session_ref *hits, size_t n, const char *home)
+{
+	const struct session_dir_info *d;
+	struct stat st;
+	char *num, *name, *file, *project, *when;
+	size_t i;
+
+	num = format_count(n);
+	msg_error("error.session.ambiguous", arg, num);
+	free(num);
+	for (i = 0; i < n; i++) {
+		d = &inv->dirs[hits[i].dir];
+		name = xmalloc(strlen(hits[i].id) + 7);
+		sprintf(name, "%s.jsonl", hits[i].id);
+		file = xjoin(d->path, name);
+		when = format_time(stat(file, &st) == 0 ? st.st_mtime : 0);
+		project = format_project(d, home);
+		msg_print(stderr, "session.match", hits[i].id, project, when);
+		free(name);
+		free(file);
+		free(when);
+		free(project);
+	}
+}
+
+/*
  * The session that arg, the start of a session id, means: added to
  * *refs once. 0 when no session has such an id, 1 when one has, -1
  * (reported) when more than one has.
  */
 static int add_session(const struct inventory *inv, const char *arg,
-    struct session_ref **refs, size_t *count)
+    const char *home, struct session_ref **refs, size_t *count)
 {
 	struct session_ref *hits;
-	char *num;
 	size_t n, i;
 
 	n = inventory_find_session(inv, arg, &hits);
-	if (n > 1) {
-		num = format_count(n);
-		msg_error("error.session.ambiguous", arg, num);
-		free(num);
-	}
+	if (n > 1)
+		report_ambiguous(inv, arg, hits, n, home);
 	if (n != 1) {
 		session_refs_free(hits, n);
 		return n == 0 ? 0 : -1;
@@ -889,7 +916,7 @@ static int run_remove(const struct command *cmd, struct cli_parsed *p)
 	memset(chosen, 0, inv.count + 1);
 	for (i = 0; i < (size_t)p->operand_count; i++) {
 		r = session_id_like(p->operands[i]) ? add_session(&inv,
-		    p->operands[i], &refs, &ref_count) : 0;
+		    p->operands[i], ctx.home, &refs, &ref_count) : 0;
 		if (r < 0)
 			status = EXIT_PARTIAL;
 		if (r != 0)
@@ -1209,7 +1236,7 @@ static int run_view(const struct command *cmd, struct cli_parsed *p)
 	struct transcript tr;
 	struct view_line *lines;
 	const char *arg = p->operands[0], *no_color, *sgr;
-	char *file, *name, *num, *shown;
+	char *file, *name, *shown;
 	size_t n = 0, count, i, width;
 	int status = 0, color;
 
@@ -1219,13 +1246,10 @@ static int run_view(const struct command *cmd, struct cli_parsed *p)
 	if (session_id_like(arg))
 		n = inventory_find_session(&inv, arg, &hits);
 	if (n != 1) {
-		if (n == 0) {
+		if (n == 0)
 			msg_error("error.view.none", arg);
-		} else {
-			num = format_count(n);
-			msg_error("error.session.ambiguous", arg, num);
-			free(num);
-		}
+		else
+			report_ambiguous(&inv, arg, hits, n, paths.home);
 		status = EXIT_PARTIAL;
 		goto done;
 	}

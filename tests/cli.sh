@@ -172,6 +172,9 @@ done
 expect 0 '^abcdef01  ' -s -- -gone
 expect 1 '^csm: “abcdef01” starts the id of more than one session (2)' \
     -r -n abcdef01
+# The full ids follow, as -s shows only their first 8 characters.
+expect 1 '^abcdef01-1111-4111 — ~/gone, last changed ' -r -n abcdef01
+expect 1 '^abcdef01-2222-4222 — ~/gone, last changed ' -v abcdef01
 expect 0 '^to the trash: session abcdef01-2222-4222 of ~/gone (orphaned)$' \
     -r -n abcdef01-2
 expect 1 'there are no sessions for “abcdef0”' -r -n abcdef0
